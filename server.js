@@ -85,8 +85,17 @@ app.post('/api/connectors', async (req, res) => {
             if (!url.startsWith('http://') && !url.startsWith('https://')) {
                 formattedUrl = 'http://' + url;
             }
-            console.log(`Initializing SSE transport for: ${formattedUrl}`);
-            transport = new SSEClientTransport(new URL(formattedUrl));
+            console.log(`[MCP] Initializing SSE transport for: ${formattedUrl}`);
+
+            // Add ngrok bypass header if it's an ngrok URL
+            const headers = {};
+            if (formattedUrl.includes('ngrok')) {
+                headers['ngrok-skip-browser-warning'] = 'true';
+            }
+
+            transport = new SSEClientTransport(new URL(formattedUrl), {
+                requestInit: { headers }
+            });
         } catch (e) {
             console.error("Invalid URL format:", url);
             return res.status(400).json({ error: "Invalid URL format. Please include http:// or https://" });

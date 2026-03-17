@@ -88,13 +88,16 @@ app.post('/api/connectors', async (req, res) => {
             console.log(`[MCP] Initializing SSE transport for: ${formattedUrl}`);
 
             // Add ngrok bypass header if it's an ngrok URL
-            const headers = {};
-            if (formattedUrl.includes('ngrok')) {
-                headers['ngrok-skip-browser-warning'] = 'true';
-            }
+            const headers = {
+                'ngrok-skip-browser-warning': 'AnyValueIsFine',
+                'User-Agent': 'DMV-DB-Connect-Client/1.0.0'
+            };
+
+            console.log(`[MCP] 🔧 Setting custom headers:`, headers);
 
             transport = new SSEClientTransport(new URL(formattedUrl), {
-                requestInit: { headers }
+                eventSourceInit: { headers }, // For EventSource
+                requestInit: { headers }      // For subsequent POSTs
             });
         } catch (e) {
             console.error("Invalid URL format:", url);
@@ -137,8 +140,10 @@ app.post('/api/connectors', async (req, res) => {
         res.json({ success: true, id: connectorId, message: `Connected to ${name || (url || command)}` });
     } catch (error) {
         console.error(`[MCP] ❌ FAILED to connect to ${name || url || command}:`, error);
-        activeConnectors.get(id).status = 'error';
-        res.status(500).json({ error: error.message || "Connection failed" });
+        if (activeConnectors.has(connectorId)) {
+            activeConnectors.get(connectorId).status = 'error';
+        }
+        res.status(500).json({ error: error.message || "Connection failed. Check server console." });
     }
 });
 

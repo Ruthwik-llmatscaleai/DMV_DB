@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, Server, Power, Box, Link as LinkIcon, Terminal } from 'lucide-react';
+import { ChevronDown, Server, Power, Box, Link as LinkIcon, Terminal, Trash2, Edit2, X, Check, RefreshCw } from 'lucide-react';
 
 export default function ConnectorsDropdown() {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef(null);
     const [isAddingMode, setIsAddingMode] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [connectType, setConnectType] = useState('stdio');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
 
     const [newConnectorName, setNewConnectorName] = useState('');
     const [newConnectorCommand, setNewConnectorCommand] = useState('');
@@ -38,9 +41,32 @@ export default function ConnectorsDropdown() {
     }, []);
 
     const toggleStatus = async (id, currentStatus) => {
-        if (currentStatus === 'connected') {
+        // Only allow delete for now to simplify
+        if (confirm("Are you sure you want to remove this connector?")) {
             await fetch(`${API_URL}/connectors/${id}`, { method: 'DELETE' });
             await fetchConnectors();
+        }
+    };
+
+    const handleEditSave = async (id) => {
+        if (!editName.trim()) return;
+        try {
+            await fetch(`${API_URL}/connectors/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: editName })
+            });
+            setEditingId(null);
+            await fetchConnectors();
+        } catch (e) { console.error("Edit failed", e); }
+    };
+
+    const handleRefresh = async () => {
+        setIsRefreshing(true);
+        try {
+            await fetchConnectors();
+        } finally {
+            setTimeout(() => setIsRefreshing(false), 500); // 500ms for visual feedback
         }
     };
 
@@ -58,11 +84,18 @@ export default function ConnectorsDropdown() {
         }
 
         try {
-            await fetch(`${API_URL}/connectors`, {
+            const resp = await fetch(`${API_URL}/connectors`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
+
+            if (!resp.ok) {
+                const errData = await resp.json();
+                console.error("Server Error while adding connector", errData);
+                alert(`Error: ${errData.error || 'Failed to connect'}`);
+            }
+
             await fetchConnectors();
         } catch (e) { console.error("Failed to add connector", e); }
 
@@ -73,99 +106,129 @@ export default function ConnectorsDropdown() {
     const activeCount = connectors.filter(c => c.status === 'connected').length;
 
     return (
-        <div className="dropdown-container relative z-50" ref={dropdownRef}>
+        <div className="dropdown-container" ref={dropdownRef}>
             <button
-                className="btn btn-secondary flex items-center gap-2 bg-white border border-gray-200 shadow-sm px-4 py-2 rounded-md hover:bg-gray-50"
+                className="btn btn-secondary flex items-center gap-2"
                 onClick={() => setIsOpen(!isOpen)}
+                style={{ fontSize: '0.875rem', backgroundColor: 'white' }}
             >
-                <Server size={16} className="text-blue-600" />
-                <span className="font-medium">Connectors ({activeCount})</span>
-                <ChevronDown size={14} className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                <Server size={16} style={{ color: 'var(--accent)' }} />
+                <span>Connectors ({activeCount})</span>
+                <ChevronDown size={14} style={{ transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
             </button>
 
             {isOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl overflow-hidden">
-                    <div className="flex justify-between items-center bg-gray-50 px-4 py-3 border-b border-gray-100">
-                        <span className="font-semibold text-gray-700">MCP Servers</span>
+                <div className="dropdown-menu">
+                    <div className="dropdown-header">
+                        <div className="flex items-center gap-2">
+                            <span>MCP Servers</span>
+                            <button
+                                onClick={handleRefresh}
+                                title="Manual Sync/Refresh"
+                                className={`btn-ghost rounded-full p-1 ${isRefreshing ? 'animate-spin' : ''}`}
+                                style={{ color: 'var(--accent)' }}
+                            >
+                                <RefreshCw size={14} />
+                            </button>
+                        </div>
                         {!isAddingMode && (
-                            <button className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium" onClick={() => setIsAddingMode(true)}>
+                            <button className="btn btn-ghost btn-small flex items-center gap-2" onClick={() => setIsAddingMode(true)}>
                                 <Box size={14} /> Add New
                             </button>
                         )}
                     </div>
 
                     {isAddingMode && (
-                        <div className="p-4 bg-gray-50 border-b border-gray-200">
-                            {/* Neat Tab Options */}
-                            <div className="flex p-1 bg-gray-200 rounded-md mb-4">
+                        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+                            <div className="flex gap-2" style={{ marginBottom: '1rem' }}>
                                 <button
                                     type="button"
                                     onClick={(e) => { e.preventDefault(); setConnectType('stdio'); }}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-xs font-semibold rounded ${connectType === 'stdio' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+                                    className={`btn flex-1 flex items-center justify-center gap-2 ${connectType === 'stdio' ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ padding: '0.4rem', fontSize: '0.8rem' }}
                                 >
                                     <Terminal size={14} /> Command
                                 </button>
                                 <button
                                     type="button"
                                     onClick={(e) => { e.preventDefault(); setConnectType('link'); }}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-xs font-semibold rounded ${connectType === 'link' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+                                    className={`btn flex-1 flex items-center justify-center gap-2 ${connectType === 'link' ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ padding: '0.4rem', fontSize: '0.8rem' }}
                                 >
                                     <LinkIcon size={14} /> Link (SSE)
                                 </button>
                             </div>
 
-                            <form onSubmit={handleAddConnector} className="flex flex-col gap-3">
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-600 mb-1">Server Name</label>
-                                    <input autoFocus type="text" value={newConnectorName} onChange={(e) => setNewConnectorName(e.target.value)} placeholder="e.g. SQLite Database" className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
-                                </div>
+                            <form onSubmit={handleAddConnector} className="flex flex-col gap-2">
+                                <input autoFocus type="text" value={newConnectorName} onChange={(e) => setNewConnectorName(e.target.value)} placeholder="Server Name (e.g. SQLite)" className="input" style={{ padding: '0.5rem', fontSize: '0.875rem' }} />
 
                                 {connectType === 'stdio' ? (
                                     <>
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-600 mb-1">Command</label>
-                                            <input required type="text" value={newConnectorCommand} onChange={(e) => setNewConnectorCommand(e.target.value)} placeholder="e.g. node or python" className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-600 mb-1">Arguments (comma separated)</label>
-                                            <input type="text" value={newConnectorArgs} onChange={(e) => setNewConnectorArgs(e.target.value)} placeholder="e.g. server.js, --port, 8080" className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
-                                        </div>
+                                        <input required type="text" value={newConnectorCommand} onChange={(e) => setNewConnectorCommand(e.target.value)} placeholder="Command (e.g. node, python)" className="input" style={{ padding: '0.5rem', fontSize: '0.875rem' }} />
+                                        <input type="text" value={newConnectorArgs} onChange={(e) => setNewConnectorArgs(e.target.value)} placeholder="Args (server.js, --port 80)" className="input" style={{ padding: '0.5rem', fontSize: '0.875rem' }} />
                                     </>
                                 ) : (
-                                    <div>
-                                        <label className="block text-xs font-medium text-gray-600 mb-1">SSE URL</label>
-                                        <input required type="url" value={newConnectorUrl} onChange={(e) => setNewConnectorUrl(e.target.value)} placeholder="http://localhost:8080/sse" className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
-                                    </div>
+                                    <input required type="url" value={newConnectorUrl} onChange={(e) => setNewConnectorUrl(e.target.value)} placeholder="SSE URL (http://localhost:8080/sse)" className="input" style={{ padding: '0.5rem', fontSize: '0.875rem' }} />
                                 )}
 
-                                <div className="flex gap-2 justify-end mt-2">
-                                    <button type="button" onClick={() => setIsAddingMode(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
-                                    <button type="submit" className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium shadow-sm">Connect Server</button>
+                                <div className="flex justify-between" style={{ marginTop: '0.5rem' }}>
+                                    <button type="button" onClick={() => setIsAddingMode(false)} className="btn btn-ghost btn-small">Cancel</button>
+                                    <button type="submit" className="btn btn-primary btn-small">Connect Server</button>
                                 </div>
                             </form>
                         </div>
                     )}
 
-                    <div className="max-h-60 overflow-y-auto p-2">
+                    <div style={{ maxHeight: '250px', overflowY: 'auto' }}>
                         {connectors.length === 0 && !isAddingMode && (
-                            <div className="text-center p-4 text-sm text-gray-500">No servers connected.</div>
+                            <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>No servers connected.</div>
                         )}
                         {connectors.map(connector => (
-                            <div key={connector.id} className="flex justify-between items-center p-2 hover:bg-gray-50 rounded-md group">
-                                <div className="flex flex-col">
-                                    <span className="text-sm font-semibold text-gray-800">{connector.name}</span>
-                                    {connector.status === 'connected' ? (
-                                        <span className="text-xs text-green-600 flex items-center gap-1 mt-0.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Connected</span>
+                            <div key={connector.id} className="connector-item">
+                                <div className="connector-info" style={{ flex: 1 }}>
+                                    {editingId === connector.id ? (
+                                        <div className="flex items-center gap-1">
+                                            <input
+                                                autoFocus
+                                                type="text"
+                                                value={editName}
+                                                onChange={(e) => setEditName(e.target.value)}
+                                                className="input p-1 text-xs"
+                                                onKeyDown={(e) => e.key === 'Enter' && handleEditSave(connector.id)}
+                                            />
+                                            <button onClick={() => handleEditSave(connector.id)} className="text-success"><Check size={14} /></button>
+                                            <button onClick={() => setEditingId(null)} className="text-secondary"><X size={14} /></button>
+                                        </div>
                                     ) : (
-                                        <span className="text-xs text-gray-400">Disconnected</span>
+                                        <div className="flex items-center gap-2">
+                                            <span className="connector-name">{connector.name}</span>
+                                            <button
+                                                onClick={() => { setEditingId(connector.id); setEditName(connector.name); }}
+                                                className="text-gray-400 hover:text-gray-600"
+                                            >
+                                                <Edit2 size={12} />
+                                            </button>
+                                        </div>
+                                    )}
+                                    {connector.status === 'connected' ? (
+                                        <span className="connector-status">Connected</span>
+                                    ) : (
+                                        <span className="connector-status" style={{ color: connector.status === 'error' ? 'var(--error)' : 'var(--text-secondary)' }}>
+                                            {connector.status === 'error' ? 'Connection Error' : 'Disconnected'}
+                                        </span>
+                                    )}
+                                    {connector.status === 'connected' && connector.tools && connector.tools.length > 0 && (
+                                        <div className="connector-tools">
+                                            Tools: {connector.tools.join(', ')}
+                                        </div>
                                     )}
                                 </div>
                                 <button
                                     onClick={() => toggleStatus(connector.id, connector.status)}
-                                    className={`p-1.5 rounded-md ${connector.status === 'connected' ? 'text-red-500 hover:bg-red-50' : 'text-gray-400'}`}
-                                    title="Disconnect"
+                                    className="btn btn-ghost btn-small text-red-500 hover:bg-red-50"
+                                    title="Remove/Disconnect"
                                 >
-                                    <Power size={16} />
+                                    <Trash2 size={16} />
                                 </button>
                             </div>
                         ))}

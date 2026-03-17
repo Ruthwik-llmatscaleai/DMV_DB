@@ -12,6 +12,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+});
+
 const PORT = 3001;
 
 // Global state for connected MCP clients
@@ -33,13 +38,20 @@ app.get('/api/connectors', async (req, res) => {
         let tools = [];
         if (connector.status === 'connected') {
             try {
-                // Use official SDK method
-                const toolsResponse = await connector.client.listTools();
+                // Use official SDK method with a 3s timeout
+                const toolsPromise = connector.client.listTools();
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000));
+
+                const toolsResponse = await Promise.race([toolsPromise, timeoutPromise]);
+
                 if (toolsResponse && toolsResponse.tools) {
                     tools = toolsResponse.tools.map(t => t.name);
                 }
             } catch (e) {
-                console.error(`Error fetching tools for ${connector.name}:`, e);
+                console.error(`Error fetching tools for ${connector.name}:`, e.message);
+                if (e.message === 'Timeout') {
+                    // Maybe connection is stale?
+                }
             }
         }
 
@@ -57,6 +69,7 @@ app.get('/api/connectors', async (req, res) => {
 // Add a new connector (Supports stdio command or SSE URL)
 app.post('/api/connectors', async (req, res) => {
     const { name, command, args, url } = req.body;
+    console.log("Adding connector:", { name, command, args, url });
 
     if (!command && !url) {
         return res.status(400).json({ error: "Either command or url is required" });
@@ -67,9 +80,20 @@ app.post('/api/connectors', async (req, res) => {
 
     if (url) {
         // SSE Transport for links
-        transport = new SSEClientTransport(new URL(url));
+        try {
+            let formattedUrl = url;
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                formattedUrl = 'http://' + url;
+            }
+            console.log(`Initializing SSE transport for: ${formattedUrl}`);
+            transport = new SSEClientTransport(new URL(formattedUrl));
+        } catch (e) {
+            console.error("Invalid URL format:", url);
+            return res.status(400).json({ error: "Invalid URL format. Please include http:// or https://" });
+        }
     } else {
         // Stdio Transport for local processes
+        console.log(`Initializing Stdio transport for: ${command} ${args.join(' ')}`);
         transport = new StdioClientTransport({
             command,
             args: args || [],
@@ -80,36 +104,66 @@ app.post('/api/connectors', async (req, res) => {
         name: "DMV-UI-Client",
         version: "1.0.0",
     }, {
-        capabilities: {}
+        capabilities: {
+            tools: {} // Specifically request tool support
+        }
     });
 
-    activeConnectors.set(id, { name: name || (url || command), client, transport, status: 'connecting' });
+    const connectorId = id;
+    activeConnectors.set(connectorId, { name: name || (url || command), client, transport, status: 'connecting' });
 
     try {
+        console.log(`[MCP] Connecting to ${name || url || command} (ID: ${connectorId})...`);
+        const connectionTimeout = setTimeout(() => {
+            if (activeConnectors.get(connectorId)?.status === 'connecting') {
+                console.error(`[MCP] ❌ Connection TIMEOUT for ${connectorId}`);
+            }
+        }, 15000);
+
         await client.connect(transport);
-        activeConnectors.get(id).status = 'connected';
-        res.json({ success: true, id, message: `Connected to ${name || (url || command)}` });
+        clearTimeout(connectionTimeout);
+
+        activeConnectors.get(connectorId).status = 'connected';
+        console.log(`[MCP] ✅ SUCCESSFULLY CONNECTED to ${name || url || command}`);
+        res.json({ success: true, id: connectorId, message: `Connected to ${name || (url || command)}` });
     } catch (error) {
-        console.error("Failed to connect", error);
+        console.error(`[MCP] ❌ FAILED to connect to ${name || url || command}:`, error);
         activeConnectors.get(id).status = 'error';
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || "Connection failed" });
     }
+});
+
+// Update/Edit a connector
+app.put('/api/connectors/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (activeConnectors.has(id)) {
+        const conn = activeConnectors.get(id);
+        conn.name = name;
+        activeConnectors.set(id, conn);
+        console.log(`[MCP] Renamed connector ${id} to "${name}"`);
+        return res.json({ success: true });
+    }
+
+    res.status(404).json({ error: "Connector not found" });
 });
 
 // Remove a connector
 app.delete('/api/connectors/:id', async (req, res) => {
     const { id } = req.params;
-    const connector = activeConnectors.get(id);
-
-    if (connector) {
+    if (activeConnectors.has(id)) {
+        const { transport } = activeConnectors.get(id);
         try {
-            await connector.transport.close();
-        } catch (e) { /* ignore */ }
+            await transport.close();
+            console.log(`[MCP] 🛑 Disconnected and removed connector: ${id}`);
+        } catch (e) {
+            console.error(`[MCP] Error closing transport for ${id}:`, e);
+        }
         activeConnectors.delete(id);
-        res.json({ success: true });
-    } else {
-        res.status(404).json({ error: "Not found" });
+        return res.json({ success: true });
     }
+    res.status(404).json({ error: "Connector not found" });
 });
 
 

@@ -159,7 +159,8 @@ app.post('/api/chat', async (req, res) => {
         }
 
         const requestBody = {
-            model: "grok-beta", // Using standard Grok model
+            // Changed from "grok-beta" to Groq's Llama 3.3 70B model identifier
+            model: "llama-3.3-70b-versatile",
             messages,
             system: "You are the DMV Assistant. You have access to specialized MCP tools. If a tool is relevant to answer the user's query, you should call it.",
         };
@@ -169,11 +170,12 @@ app.post('/api/chat', async (req, res) => {
             requestBody.tool_choice = "auto";
         }
 
-        // Call Grok API
-        const response = await fetch("https://api.x.ai/v1/chat/completions", {
+        // Changed URL to Groq's OpenAI-compatible endpoint for Llama
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
+                // Uses your existing env variable, even if it's named GROK_API_KEY
                 "Authorization": `Bearer ${GROK_API_KEY}`
             },
             body: JSON.stringify(requestBody)

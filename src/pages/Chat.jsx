@@ -23,11 +23,30 @@ export default function Chat() {
 
     const activeThread = threads.find(t => t.id === activeThreadId) || threads[0];
     const handleSendMessage = async ({ text, files }) => {
+        // 1. Read the actual contents of the attached files
+        let fileContentText = "";
+        const fileNames = [];
+
+        for (const file of files) {
+            fileNames.push(file.name);
+            try {
+                // Extracts text from txt, md, json, csv, etc.
+                const fileText = await file.text();
+                fileContentText += `\n\n--- Contents of uploaded file: ${file.name} ---\n${fileText}\n--- End of file ---\n`;
+            } catch (err) {
+                console.error("Could not read file text for:", file.name, err);
+            }
+        }
+
+        // 2. Combine user text with the file content invisibly
+        const fullPromptToSend = text + (fileContentText ? `\n\n[USER ATTACHED FILES]:${fileContentText}` : "");
+
         const userMessage = {
             id: Date.now(),
             role: 'user',
-            content: text,
-            files: files.map(f => f.name)
+            content: fullPromptToSend, // Sent to LLM with massive file text
+            displayContent: text || "Uploaded files attached.", // Only display short text in UI
+            files: fileNames
         };
 
         const activeT = threads.find(t => t.id === activeThreadId) || threads[0];
@@ -46,7 +65,12 @@ export default function Chat() {
 
         try {
             const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
-            const contextToSend = newMessagesContext.map(m => ({ role: m.role, content: m.content }));
+
+            // Map over context, sending the FULL content (including file data) to the backend
+            const contextToSend = newMessagesContext.map(m => ({
+                role: m.role,
+                content: m.content // this has the full text
+            }));
 
             const response = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
@@ -173,7 +197,7 @@ export default function Chat() {
                                     {msg.role === 'assistant' ? 'DMV Assistant' : 'Admin'}
                                 </div>
                                 <div className="text-gray-800 leading-relaxed" style={{ whiteSpace: 'pre-wrap' }}>
-                                    {msg.content}
+                                    {msg.displayContent || msg.content}
                                 </div>
                                 {msg.files && msg.files.length > 0 && (
                                     <div className="mt-2 flex flex-wrap gap-2">

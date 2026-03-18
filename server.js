@@ -1,302 +1,257 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fetch from 'node-fetch';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { z } from 'zod';
-import { EventSource } from 'eventsource';
-
-global.EventSource = EventSource;
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 3001;
+
 app.use(cors());
 app.use(express.json());
 
-app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-    next();
-});
-
-const PORT = 3001;
-
-// Global state for connected MCP clients
-// Map<string, { client: Client, transport: StdioClientTransport, status: string, name: string }>
+// -----------------------------------------------------------------------
+// State
+// -----------------------------------------------------------------------
 const activeConnectors = new Map();
-
-// Generate a random ID
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-// ----------------------------------------------------------------------
-// MCP Connectors API
-// ----------------------------------------------------------------------
+function buildTransportFromUrl(rawUrl) {
+    let formattedUrl = rawUrl.trim();
+    if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+        formattedUrl = 'https://' + formattedUrl;
+    }
 
-// Get all connectors and their tools
-app.get('/api/connectors', async (req, res) => {
-    const connectorsList = [];
+    const parsed = new URL(formattedUrl);
+    const isLegacySSE = parsed.pathname.endsWith('/sse');
 
-    for (const [id, connector] of activeConnectors.entries()) {
-        let tools = [];
-        if (connector.status === 'connected') {
-            try {
-                // Use official SDK method with a 3s timeout
-                const toolsPromise = connector.client.listTools();
-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000));
+    const headers = {
+        'ngrok-skip-browser-warning': 'true',
+        'User-Agent': 'DMV-DB-Connect-Client/1.0.0',
+    };
 
-                const toolsResponse = await Promise.race([toolsPromise, timeoutPromise]);
+    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}`);
 
-                if (toolsResponse && toolsResponse.tools) {
-                    tools = toolsResponse.tools.map(t => t.name);
-                }
-            } catch (e) {
-                console.error(`Error fetching tools for ${connector.name}:`, e.message);
-                if (e.message === 'Timeout') {
-                    // Maybe connection is stale?
-                }
-            }
-        }
-
-        connectorsList.push({
-            id,
-            name: connector.name,
-            status: connector.status,
-            tools
+    if (isLegacySSE) {
+        return new SSEClientTransport(parsed, {
+            eventSourceInit: { headers },
+            requestInit: { headers },
         });
     }
 
-    res.json(connectorsList);
+    return new StreamableHTTPClientTransport(parsed, { requestInit: { headers } });
+}
+
+// -----------------------------------------------------------------------
+// API Endpoints
+// -----------------------------------------------------------------------
+
+// GET /api/connectors
+app.get('/api/connectors', async (req, res) => {
+    const list = [];
+    for (const [id, c] of activeConnectors.entries()) {
+        let tools = [];
+        if (c.status === 'connected') {
+            try {
+                const response = await c.client.listTools();
+                tools = response.tools.map(t => t.name);
+            } catch (e) {
+                console.error(`[MCP] listTools failed for ${c.name}:`, e.message);
+            }
+        }
+        list.push({ id, name: c.name, status: c.status, tools });
+    }
+    res.json(list);
 });
 
-// Add a new connector (Supports stdio command or SSE URL)
+// POST /api/connectors
 app.post('/api/connectors', async (req, res) => {
     const { name, command, args, url } = req.body;
-    console.log("Adding connector:", { name, command, args, url });
-
-    if (!command && !url) {
-        return res.status(400).json({ error: "Either command or url is required" });
-    }
-
-    const id = generateId();
     let transport;
 
     if (url) {
-        // SSE Transport for links
         try {
-            let formattedUrl = url;
-            if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                formattedUrl = 'http://' + url;
-            }
-            console.log(`[MCP] Initializing SSE transport for: ${formattedUrl}`);
-
-            // Add ngrok bypass header if it's an ngrok URL
-            const headers = {
-                'ngrok-skip-browser-warning': 'AnyValueIsFine',
-                'User-Agent': 'DMV-DB-Connect-Client/1.0.0'
-            };
-
-            console.log(`[MCP] 🔧 Setting custom headers:`, headers);
-
-            transport = new SSEClientTransport(new URL(formattedUrl), {
-                eventSourceInit: { headers }, // For EventSource
-                requestInit: { headers }      // For subsequent POSTs
-            });
+            transport = buildTransportFromUrl(url);
         } catch (e) {
-            console.error("Invalid URL format:", url);
-            return res.status(400).json({ error: "Invalid URL format. Please include http:// or https://" });
+            return res.status(400).json({ error: `Invalid URL: ${e.message}` });
         }
     } else {
-        // Stdio Transport for local processes
-        console.log(`Initializing Stdio transport for: ${command} ${args.join(' ')}`);
-        transport = new StdioClientTransport({
-            command,
-            args: args || [],
-        });
+        transport = new StdioClientTransport({ command, args: args || [] });
     }
 
-    const client = new Client({
-        name: "DMV-UI-Client",
-        version: "1.0.0",
-    }, {
-        capabilities: {
-            tools: {} // Specifically request tool support
-        }
-    });
+    const client = new Client(
+        { name: 'DMV-UI-Client', version: '1.0.0' },
+        { capabilities: { tools: {} } }
+    );
 
-    const connectorId = id;
-    activeConnectors.set(connectorId, { name: name || (url || command), client, transport, status: 'connecting' });
+    const connectorId = generateId();
+    const displayName = name || url || command;
+    activeConnectors.set(connectorId, { name: displayName, client, transport, status: 'connecting' });
 
     try {
-        console.log(`[MCP] Connecting to ${name || url || command} (ID: ${connectorId})...`);
-        const connectionTimeout = setTimeout(() => {
-            if (activeConnectors.get(connectorId)?.status === 'connecting') {
-                console.error(`[MCP] ❌ Connection TIMEOUT for ${connectorId}`);
-            }
-        }, 15000);
+        console.log(`[MCP] Connecting to ${displayName}…`);
+        const timer = setTimeout(() => {
+            if (activeConnectors.get(connectorId)?.status === 'connecting')
+                console.error(`[MCP] Timeout connecting to ${connectorId}`);
+        }, 15_000);
 
         await client.connect(transport);
-        clearTimeout(connectionTimeout);
+        clearTimeout(timer);
 
         activeConnectors.get(connectorId).status = 'connected';
-        console.log(`[MCP] ✅ SUCCESSFULLY CONNECTED to ${name || url || command}`);
-        res.json({ success: true, id: connectorId, message: `Connected to ${name || (url || command)}` });
+        console.log(`[MCP] ✅ Connected to ${displayName}`);
+        res.json({ success: true, id: connectorId, message: `Connected to ${displayName}` });
     } catch (error) {
-        console.error(`[MCP] ❌ FAILED to connect to ${name || url || command}:`, error);
-        if (activeConnectors.has(connectorId)) {
-            activeConnectors.get(connectorId).status = 'error';
-        }
-        res.status(500).json({ error: error.message || "Connection failed. Check server console." });
+        console.error(`[MCP] ❌ Failed to connect to ${displayName}:`, error);
+        if (activeConnectors.has(connectorId)) activeConnectors.get(connectorId).status = 'error';
+        res.status(500).json({ error: error.message || 'Connection failed — see server console.' });
     }
 });
 
-// Update/Edit a connector
+// PUT /api/connectors/:id
 app.put('/api/connectors/:id', async (req, res) => {
     const { id } = req.params;
-    const { name } = req.body;
-
-    if (activeConnectors.has(id)) {
-        const conn = activeConnectors.get(id);
-        conn.name = name;
-        activeConnectors.set(id, conn);
-        console.log(`[MCP] Renamed connector ${id} to "${name}"`);
-        return res.json({ success: true });
-    }
-
-    res.status(404).json({ error: "Connector not found" });
+    if (!activeConnectors.has(id)) return res.status(404).json({ error: 'Not found' });
+    activeConnectors.get(id).name = req.body.name;
+    res.json({ success: true });
 });
 
-// Remove a connector
+// DELETE /api/connectors/:id
 app.delete('/api/connectors/:id', async (req, res) => {
     const { id } = req.params;
-    if (activeConnectors.has(id)) {
-        const { transport } = activeConnectors.get(id);
-        try {
-            await transport.close();
-            console.log(`[MCP] 🛑 Disconnected and removed connector: ${id}`);
-        } catch (e) {
-            console.error(`[MCP] Error closing transport for ${id}:`, e);
-        }
-        activeConnectors.delete(id);
-        return res.json({ success: true });
-    }
-    res.status(404).json({ error: "Connector not found" });
+    if (!activeConnectors.has(id)) return res.status(404).json({ error: 'Not found' });
+    try { await activeConnectors.get(id).transport.close(); } catch { /* ignore */ }
+    activeConnectors.delete(id);
+    res.json({ success: true });
 });
 
-
-// ----------------------------------------------------------------------
-// Chat & Grok Integration API
-// ----------------------------------------------------------------------
-
+// POST /api/chat
 app.post('/api/chat', async (req, res) => {
     const { messages } = req.body;
     const GROK_API_KEY = process.env.GROK_API_KEY;
 
     if (!GROK_API_KEY || GROK_API_KEY === 'your_grok_api_key_here') {
-        return res.status(500).json({
-            error: "GROK_API_KEY is not configured in the backend .env file."
-        });
+        return res.status(500).json({ error: 'GROK_API_KEY not configured in .env' });
     }
 
     try {
-        // 1. Collect all available tools from all active connectors
-        let availableTools = [];
-        const toolToConnectorMap = new Map(); // Keep track of which connector owns which tool
+        const availableTools = [];
+        const toolToConnector = new Map();
 
-        for (const [id, connector] of activeConnectors.entries()) {
-            if (connector.status === 'connected') {
-                try {
-                    // Use official SDK method to list tools
-                    const toolsResponse = await connector.client.listTools();
-
-                    if (toolsResponse && toolsResponse.tools) {
-                        toolsResponse.tools.forEach(tool => {
-                            // Convert MCP tool schema to OpenAI/Grok format
-                            availableTools.push({
-                                type: "function",
-                                function: {
-                                    name: tool.name,
-                                    description: tool.description || `Tool from ${connector.name}`,
-                                    parameters: tool.inputSchema // Grok expects JSON schema
-                                }
-                            });
-                            toolToConnectorMap.set(tool.name, connector);
-                        });
-                    }
-                } catch (e) {
-                    console.error("Error listing tools", e);
+        for (const [, c] of activeConnectors.entries()) {
+            if (c.status !== 'connected') continue;
+            try {
+                const { tools = [] } = await c.client.listTools();
+                for (const tool of tools) {
+                    availableTools.push({
+                        type: 'function',
+                        function: {
+                            name: tool.name,
+                            description: tool.description || `Tool from ${c.name}`,
+                            parameters: tool.inputSchema
+                        },
+                    });
+                    toolToConnector.set(tool.name, c);
                 }
-            }
+            } catch (e) { console.error('[MCP] listTools error:', e.message); }
         }
 
-        const requestBody = {
-            // Changed from "grok-beta" to Groq's Llama 3.3 70B model identifier
-            model: "llama-3.3-70b-versatile",
-            messages,
-            system: "You are the DMV Assistant. You have access to specialized MCP tools. If a tool is relevant to answer the user's query, you should call it.",
-        };
+        let messagesToLlm = [
+            { role: 'system', content: 'You are the DMV Assistant. You have access to BigQuery via MCP tools. Use list_datasets and list_tables to explore before querying. Do NOT use SHOW statements. IMPORTANT: When tools return data, summarize the results in plain, natural English for the user. Do not just show JSON.' },
+            ...messages
+        ];
 
-        if (availableTools.length > 0) {
-            requestBody.tools = availableTools;
-            requestBody.tool_choice = "auto";
-        }
-
-        // Changed URL to Groq's OpenAI-compatible endpoint for Llama
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                // Uses your existing env variable, even if it's named GROK_API_KEY
-                "Authorization": `Bearer ${GROK_API_KEY}`
-            },
-            body: JSON.stringify(requestBody)
+        // --- FIRST LLM CALL ---
+        let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROK_API_KEY}` },
+            body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile',
+                messages: messagesToLlm,
+                ...(availableTools.length > 0 && { tools: availableTools, tool_choice: 'auto' }),
+            }),
         });
 
         if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Grok API Error: ${errText}`);
+            const errData = await response.json().catch(() => ({}));
+            console.error('[Groq] API Error:', JSON.stringify(errData, null, 2));
+            return res.json({
+                role: 'assistant',
+                content: `⚠️ (AI Error): ${errData.error?.message || 'The AI failed to generate a response.'}`
+            });
         }
 
-        const data = await response.json();
-        const assistantMessage = data.choices[0].message;
+        let data = await response.json();
+        let msg = data.choices[0].message;
 
-        // Handle Tool Calling from Grok
-        if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-            // In a more complex architecture we'd loop this back to the LLM, 
-            // but to keep this iteration manageable, we'll execute it and append the result.
-            const toolCall = assistantMessage.tool_calls[0];
-            const functionName = toolCall.function.name;
-            const functionArgs = JSON.parse(toolCall.function.arguments || '{}');
+        // --- TOOL EXECUTION LOOP ---
+        if (msg.tool_calls?.length > 0) {
+            console.log(`[Chat] LLM requested ${msg.tool_calls.length} tool calls.`);
+            messagesToLlm.push(msg); // Add assistant's tool call to history
 
-            const connector = toolToConnectorMap.get(functionName);
+            for (const toolCall of msg.tool_calls) {
+                const { function: fn, id: toolCallId } = toolCall;
+                const connector = toolToConnector.get(fn.name);
 
-            if (connector) {
-                try {
-                    // Use official SDK method to call tool
-                    const toolResult = await connector.client.callTool({
-                        name: functionName,
-                        arguments: functionArgs
+                if (connector) {
+                    try {
+                        console.log(`[Chat] Executing ${fn.name}...`);
+                        const result = await connector.client.callTool({
+                            name: fn.name,
+                            arguments: JSON.parse(fn.arguments || '{}')
+                        });
+
+                        messagesToLlm.push({
+                            role: 'tool',
+                            tool_call_id: toolCallId,
+                            content: JSON.stringify(result.content)
+                        });
+                    } catch (e) {
+                        console.error(`[Chat] Tool ${fn.name} failed:`, e.message);
+                        messagesToLlm.push({
+                            role: 'tool',
+                            tool_call_id: toolCallId,
+                            content: `Error: ${e.message}`
+                        });
+                    }
+                } else {
+                    messagesToLlm.push({
+                        role: 'tool',
+                        tool_call_id: toolCallId,
+                        content: `Error: Connector for ${fn.name} not found.`
                     });
-
-                    // Append a notice about the tool execution to the assistant message
-                    assistantMessage.content = (assistantMessage.content || "") +
-                        `\n\n*(System Note: Executed tool '${functionName}' via MCP Server '${connector.name}'. Result:\n${JSON.stringify(toolResult.content)}*)`;
-
-                } catch (e) {
-                    assistantMessage.content = (assistantMessage.content || "") +
-                        `\n\n*(System Note: Attempted to execute tool '${functionName}' but it failed: ${e.message})*`;
                 }
+            }
+
+            // --- SECOND LLM CALL (Summarization) ---
+            console.log(`[Chat] Sending tool results back for summarization...`);
+            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROK_API_KEY}` },
+                body: JSON.stringify({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: messagesToLlm
+                }),
+            });
+
+            if (response.ok) {
+                data = await response.json();
+                msg = data.choices[0].message;
+            } else {
+                console.error('[Groq] Second call failed');
             }
         }
 
-        res.json(assistantMessage);
-
+        res.json(msg);
     } catch (error) {
-        console.error("Chat Error:", error);
+        console.error('[Chat] Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`DMV Backend Server running on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`DMV Backend running on http://localhost:${PORT}`));

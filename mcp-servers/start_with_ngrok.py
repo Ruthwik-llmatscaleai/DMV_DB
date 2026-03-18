@@ -10,10 +10,15 @@ VENV_PATH = "/Users/rajasekharbandreddy/Downloads/bq_mcp_test/venv"
 PYTHON_EXEC = os.path.join(VENV_PATH, "bin", "python3")
 MCP_SCRIPT = "/Users/rajasekharbandreddy/Downloads/bq_mcp_test/bq_mcp_server.py"
 
-# --- Start MCP Server ---
-print(f"Starting MCP Server on port {PORT}...")
-# Use the venv's python to run the script
-mcp_process = subprocess.Popen([PYTHON_EXEC, MCP_SCRIPT])
+# --- Start MCP Server with Hot-Reloading (mcp-hmr) ---
+print(f"Starting MCP Server on port {PORT} with hot-reloading...")
+mcp_process = subprocess.Popen([
+    PYTHON_EXEC, "-m", "mcp_hmr",
+    "bq_mcp_server:mcp",
+    "-t", "http",
+    "--host", "0.0.0.0",
+    "--port", str(PORT)
+])
 
 # Wait a moment for the server to start
 time.sleep(2)

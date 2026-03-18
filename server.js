@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fetch from 'node-fetch';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -130,16 +129,44 @@ app.delete('/api/connectors/:id', async (req, res) => {
     res.json({ success: true });
 });
 
+// -----------------------------------------------------------------------
+// System Prompt — strict NLP-only, no code/SQL/JSON leakage
+// -----------------------------------------------------------------------
+const SYSTEM_PROMPT = `You are a helpful and friendly DMV administrative assistant named Atlas.
+You have access to an internal database behind the scenes, but the user never needs to know anything about how it works technically.
+
+ABSOLUTE RULES — never break these under any circumstances:
+1. NEVER show SQL queries, code snippets, JSON, arrays, objects, or any technical syntax to the user. All database logic stays invisible.
+2. NEVER mention tool names, function names, MCP, BigQuery, datasets, or any internal infrastructure.
+3. NEVER show raw data like [{"col": "val"}] or { rows: [...] } in your reply.
+4. NEVER use markdown code blocks (\`\`\`) in your responses.
+5. ALWAYS respond in plain, natural, conversational English.
+6. When data is returned from the database, translate it into a clean human-readable summary — like a helpful colleague reading the results aloud.
+7. If the result is a list of items, present them as a neatly formatted plain-text list with bullet points or numbered lines.
+8. If the result is a count or number, say it naturally: "There are 142 registered vehicles matching that description."
+9. If a query fails or returns nothing, say so simply: "I couldn't find any records matching that. Would you like to try a different search?"
+10. Keep a professional but approachable tone — like a knowledgeable government service agent.
+11. Only show a SQL query if the user EXPLICITLY asks with words like "show me the query" or "what SQL did you run".
+12. If asked about your capabilities, describe what you can help with in plain English — not technical tool names.
+13. When presenting tabular data, format it as a readable plain-text table with aligned columns or a simple numbered list — never as JSON.
+14. Do not add unnecessary disclaimers, caveats, or technical explanations unless the user asks.
+
+You can help users: look up vehicle records, check registration status, find driver information, run counts and summaries, explore datasets, and answer questions about DMV data — all explained in plain English.
+You should use tools as needed to answer questions, but your final response to the user must be summarized in plain English.`;
+
+// -----------------------------------------------------------------------
 // POST /api/chat
+// -----------------------------------------------------------------------
 app.post('/api/chat', async (req, res) => {
     const { messages } = req.body;
-    const GROK_API_KEY = process.env.GROK_API_KEY;
+    const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY;
 
-    if (!GROK_API_KEY || GROK_API_KEY === 'your_grok_api_key_here') {
-        return res.status(500).json({ error: 'GROK_API_KEY not configured in .env' });
+    if (!GROQ_API_KEY || GROQ_API_KEY === 'your_grok_api_key_here') {
+        return res.status(500).json({ error: 'GROQ_API_KEY not configured in .env' });
     }
 
     try {
+        // Collect all tools from all connected MCP servers
         const availableTools = [];
         const toolToConnector = new Map();
 
@@ -158,21 +185,31 @@ app.post('/api/chat', async (req, res) => {
                     });
                     toolToConnector.set(tool.name, c);
                 }
-            } catch (e) { console.error('[MCP] listTools error:', e.message); }
+            } catch (e) {
+                console.error('[MCP] listTools error:', e.message);
+            }
         }
 
-        let messagesToLlm = [
-            { role: 'system', content: 'You are the DMV Assistant. You have access to BigQuery via MCP tools. Use list_datasets and list_tables to explore before querying. Do NOT use SHOW statements. IMPORTANT: When tools return data, summarize the results in plain, natural English for the user. Do not just show JSON.' },
-            ...messages
+        // Build message history — strip any accidental tool call metadata from prior turns
+        const messagesToLlm = [
+            { role: 'system', content: SYSTEM_PROMPT },
+            ...messages.map(m => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            }))
         ];
 
         // --- FIRST LLM CALL ---
         let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROK_API_KEY}` },
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${GROQ_API_KEY}`
+            },
             body: JSON.stringify({
                 model: 'llama-3.3-70b-versatile',
                 messages: messagesToLlm,
+                temperature: 0,
                 ...(availableTools.length > 0 && { tools: availableTools, tool_choice: 'auto' }),
             }),
         });
@@ -182,7 +219,7 @@ app.post('/api/chat', async (req, res) => {
             console.error('[Groq] API Error:', JSON.stringify(errData, null, 2));
             return res.json({
                 role: 'assistant',
-                content: `⚠️ (AI Error): ${errData.error?.message || 'The AI failed to generate a response.'}`
+                content: `I'm having trouble connecting right now. Please try again in a moment.`
             });
         }
 
@@ -191,8 +228,8 @@ app.post('/api/chat', async (req, res) => {
 
         // --- TOOL EXECUTION LOOP ---
         if (msg.tool_calls?.length > 0) {
-            console.log(`[Chat] LLM requested ${msg.tool_calls.length} tool calls.`);
-            messagesToLlm.push(msg); // Add assistant's tool call to history
+            console.log(`[Chat] LLM requested ${msg.tool_calls.length} tool call(s).`);
+            messagesToLlm.push(msg);
 
             for (const toolCall of msg.tool_calls) {
                 const { function: fn, id: toolCallId } = toolCall;
@@ -200,12 +237,13 @@ app.post('/api/chat', async (req, res) => {
 
                 if (connector) {
                     try {
-                        console.log(`[Chat] Executing ${fn.name}...`);
+                        console.log(`[Chat] Executing tool: ${fn.name}`);
                         const result = await connector.client.callTool({
                             name: fn.name,
                             arguments: JSON.parse(fn.arguments || '{}')
                         });
 
+                        // Pass raw result to LLM — LLM will translate it to English per system prompt
                         messagesToLlm.push({
                             role: 'tool',
                             tool_call_id: toolCallId,
@@ -216,26 +254,30 @@ app.post('/api/chat', async (req, res) => {
                         messagesToLlm.push({
                             role: 'tool',
                             tool_call_id: toolCallId,
-                            content: `Error: ${e.message}`
+                            content: `The operation failed: ${e.message}`
                         });
                     }
                 } else {
                     messagesToLlm.push({
                         role: 'tool',
                         tool_call_id: toolCallId,
-                        content: `Error: Connector for ${fn.name} not found.`
+                        content: `Tool not available.`
                     });
                 }
             }
 
-            // --- SECOND LLM CALL (Summarization) ---
-            console.log(`[Chat] Sending tool results back for summarization...`);
+            // --- SECOND LLM CALL: translate results into plain English ---
+            console.log(`[Chat] Summarising tool results into plain English...`);
             response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROK_API_KEY}` },
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${GROQ_API_KEY}`
+                },
                 body: JSON.stringify({
                     model: 'llama-3.3-70b-versatile',
-                    messages: messagesToLlm
+                    messages: messagesToLlm,
+                    temperature: 0,
                 }),
             });
 
@@ -243,14 +285,25 @@ app.post('/api/chat', async (req, res) => {
                 data = await response.json();
                 msg = data.choices[0].message;
             } else {
-                console.error('[Groq] Second call failed');
+                console.error('[Groq] Second summarisation call failed');
+                msg = { role: 'assistant', content: "I retrieved the data but had trouble formatting the response. Please try again." };
             }
         }
 
-        res.json(msg);
+        // Final safety strip — if the LLM leaked any code blocks, remove them
+        if (typeof msg.content === 'string') {
+            msg.content = msg.content
+                .replace(/```[\s\S]*?```/g, '[data processed]')
+                .replace(/`[^`]+`/g, (match) => match.slice(1, -1)); // unwrap inline code
+        }
+
+        res.json({ role: 'assistant', content: msg.content });
     } catch (error) {
-        console.error('[Chat] Error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[Chat] Unexpected error:', error);
+        res.status(500).json({
+            role: 'assistant',
+            content: "Something went wrong on my end. Please try again."
+        });
     }
 });
 

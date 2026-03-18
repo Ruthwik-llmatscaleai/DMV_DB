@@ -1,75 +1,79 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import ConnectorsDropdown from '../components/ConnectorsDropdown';
 import ChatInput from '../components/ChatInput';
-import { MessageSquarePlus, Settings, LogOut, ShieldAlert } from 'lucide-react';
+import MessageRenderer from '../components/MessageRenderer';
+import { MessageSquarePlus, Settings, LogOut, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+
+const WELCOME_MESSAGE = {
+    id: 1,
+    role: 'assistant',
+    content: "Hello! I'm Atlas, your DMV administrative assistant. I can help you look up vehicle records, check registration information, run data summaries, and much more. What would you like to know today?"
+};
+
 export default function Chat() {
     const navigate = useNavigate();
+    const messagesEndRef = useRef(null);
+
     const [threads, setThreads] = useState([
-        {
-            id: Date.now(),
-            title: 'Current Session',
-            messages: [
-                {
-                    id: 1,
-                    role: 'assistant',
-                    content: 'Hello Admin. I am connected to the DMV DMV_DB-connect system. How can I assist you with vehicle records, document extraction, or other internal tools today?',
-                    files: []
-                }
-            ]
-        }
+        { id: Date.now(), title: 'New Session', messages: [WELCOME_MESSAGE] }
     ]);
     const [activeThreadId, setActiveThreadId] = useState(threads[0].id);
+    const [isLoading, setIsLoading] = useState(false);
 
     const activeThread = threads.find(t => t.id === activeThreadId) || threads[0];
+
+    // Auto-scroll to latest message
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [activeThread.messages, isLoading]);
+
     const handleSendMessage = async ({ text, files }) => {
-        // 1. Read the actual contents of the attached files
-        let fileContentText = "";
+        if (!text.trim() && files.length === 0) return;
+
+        // Read file contents invisibly for the LLM
+        let fileContentText = '';
         const fileNames = [];
 
         for (const file of files) {
             fileNames.push(file.name);
             try {
-                // Extracts text from txt, md, json, csv, etc.
                 const fileText = await file.text();
-                fileContentText += `\n\n--- Contents of uploaded file: ${file.name} ---\n${fileText}\n--- End of file ---\n`;
+                fileContentText += `\n\n--- Uploaded file: ${file.name} ---\n${fileText}\n--- End of file ---\n`;
             } catch (err) {
-                console.error("Could not read file text for:", file.name, err);
+                console.error('Could not read file:', file.name, err);
             }
         }
 
-        // 2. Combine user text with the file content invisibly
-        const fullPromptToSend = text + (fileContentText ? `\n\n[USER ATTACHED FILES]:${fileContentText}` : "");
+        const fullPrompt = text + (fileContentText ? `\n\n[ATTACHED FILES]:${fileContentText}` : '');
 
         const userMessage = {
             id: Date.now(),
             role: 'user',
-            content: fullPromptToSend, // Sent to LLM with massive file text
-            displayContent: text || "Uploaded files attached.", // Only display short text in UI
+            content: fullPrompt,           // full content sent to LLM
+            displayContent: text || 'Uploaded files.',  // clean display
             files: fileNames
         };
 
-        const activeT = threads.find(t => t.id === activeThreadId) || threads[0];
-        const newMessagesContext = [...activeT.messages, userMessage];
+        // Determine thread title from first real user message
+        const isFirstUserMessage = activeThread.messages.filter(m => m.role === 'user').length === 0;
+        const newTitle = isFirstUserMessage && text ? text.slice(0, 40) + (text.length > 40 ? '…' : '') : activeThread.title;
 
-        setThreads(prev => prev.map(t => {
-            if (t.id === activeThreadId) {
-                return {
-                    ...t,
-                    title: (t.messages.length === 1 && text) ? text.slice(0, 30) + '...' : t.title,
-                    messages: newMessagesContext
-                };
-            }
-            return t;
-        }));
+        setThreads(prev => prev.map(t =>
+            t.id === activeThreadId
+                ? { ...t, title: newTitle, messages: [...t.messages, userMessage] }
+                : t
+        ));
+        setIsLoading(true);
 
         try {
             const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
-            // Map over context, sending the FULL content (including file data) to the backend
-            const contextToSend = newMessagesContext.map(m => ({
+            // Build context: use full content for LLM, keep role only
+            const updatedMessages = [...activeThread.messages, userMessage];
+            const contextToSend = updatedMessages.map(m => ({
                 role: m.role,
-                content: m.content // this has the full text
+                content: m.content
             }));
 
             const response = await fetch(`${API_URL}/chat`, {
@@ -78,39 +82,36 @@ export default function Chat() {
                 body: JSON.stringify({ messages: contextToSend })
             });
 
-            if (!response.ok) {
-                throw new Error("Backend response not ok");
-            }
-            const data = await response.json();
+            if (!response.ok) throw new Error('Backend response not ok');
 
-            setThreads(prev => prev.map(t => {
-                if (t.id === activeThreadId) {
-                    return {
-                        ...t,
-                        messages: [...t.messages, {
-                            id: Date.now() + 1,
-                            role: 'assistant',
-                            content: data.content || JSON.stringify(data)
-                        }]
-                    };
-                }
-                return t;
-            }));
+            const data = await response.json();
+            const assistantMessage = {
+                id: Date.now() + 1,
+                role: 'assistant',
+                content: data.content || "I received a response but couldn't read it. Please try again."
+            };
+
+            setThreads(prev => prev.map(t =>
+                t.id === activeThreadId
+                    ? { ...t, messages: [...t.messages, userMessage, assistantMessage] }
+                    : t
+            ));
         } catch (error) {
-            console.error(error);
-            setThreads(prev => prev.map(t => {
-                if (t.id === activeThreadId) {
-                    return {
+            console.error('Chat error:', error);
+            setThreads(prev => prev.map(t =>
+                t.id === activeThreadId
+                    ? {
                         ...t,
-                        messages: [...t.messages, {
+                        messages: [...t.messages, userMessage, {
                             id: Date.now() + 1,
                             role: 'assistant',
-                            content: "(System Error): Failed to reach DMV backend logic layer. Is server.js running?"
+                            content: "I'm having trouble connecting to the backend. Please make sure the server is running and try again."
                         }]
-                    };
-                }
-                return t;
-            }));
+                    }
+                    : t
+            ));
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -118,49 +119,60 @@ export default function Chat() {
         const newThread = {
             id: Date.now(),
             title: 'New Session',
-            messages: [
-                {
-                    id: 1,
-                    role: 'assistant',
-                    content: 'Hello again! What would you like to investigate now?',
-                    files: []
-                }
-            ]
+            messages: [{ ...WELCOME_MESSAGE, id: Date.now() }]
         };
         setThreads(prev => [newThread, ...prev]);
         setActiveThreadId(newThread.id);
     };
 
-    const handleLogout = () => {
-        navigate('/login');
-    };
-
     return (
         <div className="chat-layout">
-            {/* Sidebar */}
+            {/* ── Sidebar ── */}
             <div className="sidebar">
                 <div className="sidebar-header">
                     <div className="flex items-center gap-2 font-bold text-lg" style={{ color: 'var(--accent)' }}>
-                        <ShieldAlert size={24} />
-                        DMV Assist
+                        <ShieldCheck size={22} />
+                        <span>DMV Atlas</span>
                     </div>
                 </div>
+
                 <div className="flex-1 overflow-y-auto px-4 py-2">
                     <button className="new-chat-btn" onClick={handleNewChat}>
-                        <span>New Chat</span>
+                        <span>New Conversation</span>
                         <MessageSquarePlus size={18} />
                     </button>
 
-                    <div className="text-sm font-semibold mb-2 mt-6 text-gray-500 uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
-                        Session History
+                    <div style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: 'var(--text-muted)',
+                        marginBottom: '0.5rem',
+                        marginTop: '1.5rem'
+                    }}>
+                        Recent
                     </div>
+
                     <div className="flex flex-col gap-1">
                         {threads.map(thread => (
                             <button
                                 key={thread.id}
                                 onClick={() => setActiveThreadId(thread.id)}
-                                className={`btn btn-ghost justify-start truncate ${thread.id === activeThreadId ? 'font-semibold text-blue-600 !bg-blue-50' : ''}`}
-                                style={{ textAlign: 'left', padding: '0.5rem', backgroundColor: thread.id === activeThreadId ? 'var(--bg-primary)' : 'transparent', border: thread.id === activeThreadId ? '1px solid var(--border)' : '1px solid transparent' }}
+                                className="btn btn-ghost justify-start"
+                                style={{
+                                    textAlign: 'left',
+                                    padding: '0.5rem 0.75rem',
+                                    fontSize: '0.875rem',
+                                    fontWeight: thread.id === activeThreadId ? 600 : 400,
+                                    backgroundColor: thread.id === activeThreadId ? 'var(--bg-primary)' : 'transparent',
+                                    border: thread.id === activeThreadId ? '1px solid var(--border)' : '1px solid transparent',
+                                    borderRadius: 'var(--radius-md)',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    color: thread.id === activeThreadId ? 'var(--accent)' : 'var(--text-secondary)'
+                                }}
                             >
                                 {thread.title}
                             </button>
@@ -169,53 +181,119 @@ export default function Chat() {
                 </div>
 
                 <div className="p-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                    <button className="btn btn-ghost w-full justify-start gap-2 mb-2" style={{ padding: '0.5rem' }}>
-                        <Settings size={18} /> Settings
+                    <button className="btn btn-ghost w-full justify-start gap-2 mb-1" style={{ padding: '0.5rem', fontSize: '0.875rem' }}>
+                        <Settings size={16} /> Settings
                     </button>
-                    <button className="btn btn-ghost w-full justify-start gap-2" style={{ padding: '0.5rem' }} onClick={handleLogout}>
-                        <LogOut size={18} /> Log out
+                    <button
+                        className="btn btn-ghost w-full justify-start gap-2"
+                        style={{ padding: '0.5rem', fontSize: '0.875rem' }}
+                        onClick={() => navigate('/login')}
+                    >
+                        <LogOut size={16} /> Log out
                     </button>
                 </div>
             </div>
 
-            {/* Main Content Area */}
+            {/* ── Main Content ── */}
             <div className="main-content">
-                {/* Header with Tool Dropdown */}
+                {/* Header */}
                 <div className="chat-header">
-                    <div className="font-semibold text-lg">System Dashboard</div>
+                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text-primary)' }}>
+                        {activeThread.title}
+                    </div>
                     <ConnectorsDropdown />
                 </div>
+
                 {/* Messages */}
                 <div className="messages-container">
                     {activeThread.messages.map((msg) => (
                         <div key={msg.id} className="message">
+                            {/* Avatar */}
                             <div className={`message-avatar ${msg.role}`}>
-                                {msg.role === 'assistant' ? <ShieldAlert size={20} /> : 'A'}
+                                {msg.role === 'assistant'
+                                    ? <ShieldCheck size={18} />
+                                    : <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>A</span>
+                                }
                             </div>
+
+                            {/* Content */}
                             <div className="message-content">
-                                <div className="message-name">
-                                    {msg.role === 'assistant' ? 'DMV Assistant' : 'Admin'}
+                                <div className="message-name" style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.4rem' }}>
+                                    {msg.role === 'assistant' ? 'Atlas' : 'You'}
                                 </div>
-                                <div className="text-gray-800 leading-relaxed" style={{ whiteSpace: 'pre-wrap' }}>
-                                    {msg.displayContent || msg.content}
-                                </div>
+
+                                <MessageRenderer
+                                    content={msg.displayContent || msg.content}
+                                    role={msg.role}
+                                />
+
+                                {/* Attached file chips */}
                                 {msg.files && msg.files.length > 0 && (
-                                    <div className="mt-2 flex flex-wrap gap-2">
+                                    <div style={{ marginTop: '0.6rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
                                         {msg.files.map((file, i) => (
-                                            <div key={i} className="bg-gray-100 px-3 py-1 rounded text-sm font-medium flex items-center gap-2" style={{ backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
+                                            <span key={i} style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '0.3rem',
+                                                backgroundColor: 'var(--bg-tertiary)',
+                                                borderRadius: 'var(--radius-sm)',
+                                                padding: '0.2rem 0.6rem',
+                                                fontSize: '0.8rem',
+                                                color: 'var(--text-secondary)'
+                                            }}>
                                                 📎 {file}
-                                            </div>
+                                            </span>
                                         ))}
                                     </div>
                                 )}
                             </div>
                         </div>
                     ))}
+
+                    {/* Typing indicator */}
+                    {isLoading && (
+                        <div className="message">
+                            <div className="message-avatar assistant">
+                                <ShieldCheck size={18} />
+                            </div>
+                            <div className="message-content">
+                                <div className="message-name" style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.4rem' }}>
+                                    Atlas
+                                </div>
+                                <TypingIndicator />
+                            </div>
+                        </div>
+                    )}
+
+                    <div ref={messagesEndRef} />
                 </div>
 
                 {/* Input */}
-                <ChatInput onSendMessage={handleSendMessage} />
+                <ChatInput onSendMessage={handleSendMessage} disabled={isLoading} />
             </div>
+        </div>
+    );
+}
+
+function TypingIndicator() {
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 0' }}>
+            {[0, 1, 2].map(i => (
+                <span key={i} style={{
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--text-muted)',
+                    display: 'inline-block',
+                    animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`
+                }} />
+            ))}
+            <style>{`
+                @keyframes bounce {
+                    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+                    30% { transform: translateY(-5px); opacity: 1; }
+                }
+            `}</style>
         </div>
     );
 }

@@ -11,7 +11,11 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type'],
+}));
 app.use(express.json());
 
 // -----------------------------------------------------------------------
@@ -130,7 +134,7 @@ app.delete('/api/connectors/:id', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------
-// System Prompt — strict NLP-only, no code/SQL/JSON leakage
+// System Prompt
 // -----------------------------------------------------------------------
 const SYSTEM_PROMPT = `You are a helpful and friendly data assistant named Atlas.
 You are connected to a live database through internal tools. You have NO knowledge of what data exists until you query those tools — never guess, assume, or invent answers about data.
@@ -138,7 +142,7 @@ You are connected to a live database through internal tools. You have NO knowled
 TOOL USAGE — mandatory rules:
 1. ANY question about what data exists, what datasets/tables/collections are available, or any data lookup MUST trigger a tool call first. No exceptions.
 2. Questions like "what datasets are there", "what data do you have", "what tables exist", "show me what's available", "can you see the data" — always call the discovery tool immediately before responding.
-3. To explore data: first call the list-datasets tool, then list-tables for a specific dataset, then query as needed. Chain calls freely.
+3. To explore data: first call the list-datasets tool, then list-tables for a specific dataset, then query as needed. Chain calls freely — you may call tools multiple times in sequence.
 4. If a tool returns nothing or errors, say honestly: "I checked and couldn't find anything matching that. Want to try a different search?"
 5. NEVER answer data questions from memory or assumption — you do not know what is in the database until you look.
 
@@ -157,6 +161,74 @@ OUTPUT RULES — how to present results:
 Remember: your first move on any data question is always to query the tools. You cannot answer data questions without looking first.`;
 
 // -----------------------------------------------------------------------
+// Helper — build tool registry from all connected connectors
+// -----------------------------------------------------------------------
+async function buildToolRegistry() {
+    const availableTools = [];
+    const toolToConnector = new Map();
+
+    for (const [, c] of activeConnectors.entries()) {
+        if (c.status !== 'connected') continue;
+        try {
+            const { tools = [] } = await c.client.listTools();
+            for (const tool of tools) {
+                availableTools.push({
+                    type: 'function',
+                    function: {
+                        name: tool.name,
+                        description: tool.description || `Tool from ${c.name}`,
+                        parameters: tool.inputSchema,
+                    },
+                });
+                toolToConnector.set(tool.name, c);
+            }
+        } catch (e) {
+            console.error('[MCP] listTools error:', e.message);
+        }
+    }
+
+    return { availableTools, toolToConnector };
+}
+
+// -----------------------------------------------------------------------
+// Helper — execute a single round of tool calls and append results
+// -----------------------------------------------------------------------
+async function executeToolCalls(toolCalls, toolToConnector, messagesToLlm) {
+    for (const toolCall of toolCalls) {
+        const { function: fn, id: toolCallId } = toolCall;
+        const connector = toolToConnector.get(fn.name);
+
+        if (connector) {
+            try {
+                console.log(`[Chat] Executing tool: ${fn.name}`);
+                const result = await connector.client.callTool({
+                    name: fn.name,
+                    arguments: JSON.parse(fn.arguments || '{}'),
+                });
+                messagesToLlm.push({
+                    role: 'tool',
+                    tool_call_id: toolCallId,
+                    content: JSON.stringify(result.content),
+                });
+            } catch (e) {
+                console.error(`[Chat] Tool ${fn.name} failed:`, e.message);
+                messagesToLlm.push({
+                    role: 'tool',
+                    tool_call_id: toolCallId,
+                    content: `The operation failed: ${e.message}`,
+                });
+            }
+        } else {
+            messagesToLlm.push({
+                role: 'tool',
+                tool_call_id: toolCallId,
+                content: 'Tool not available.',
+            });
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
 // POST /api/chat
 // -----------------------------------------------------------------------
 app.post('/api/chat', async (req, res) => {
@@ -168,135 +240,90 @@ app.post('/api/chat', async (req, res) => {
     }
 
     try {
-        // Collect all tools from all connected MCP servers
-        const availableTools = [];
-        const toolToConnector = new Map();
+        const { availableTools, toolToConnector } = await buildToolRegistry();
 
-        for (const [, c] of activeConnectors.entries()) {
-            if (c.status !== 'connected') continue;
-            try {
-                const { tools = [] } = await c.client.listTools();
-                for (const tool of tools) {
-                    availableTools.push({
-                        type: 'function',
-                        function: {
-                            name: tool.name,
-                            description: tool.description || `Tool from ${c.name}`,
-                            parameters: tool.inputSchema
-                        },
-                    });
-                    toolToConnector.set(tool.name, c);
-                }
-            } catch (e) {
-                console.error('[MCP] listTools error:', e.message);
-            }
-        }
-
-        // Build message history — strip any accidental tool call metadata from prior turns
         const messagesToLlm = [
             { role: 'system', content: SYSTEM_PROMPT },
             ...messages.map(m => ({
                 role: m.role,
-                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-            }))
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            })),
         ];
 
-        // --- FIRST LLM CALL ---
-        let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${GROQ_API_KEY}`
-            },
-            body: JSON.stringify({
+        const callGroq = async (includeTools) => {
+            const lastUserMsg = messagesToLlm.filter(m => m.role === 'user').slice(-1)[0]?.content || '';
+            const isDataQuestion = /dataset|table|data|record|show|list|what.*have|query|find|look.*up|search|count|how many/i.test(lastUserMsg);
+
+            const body = {
                 model: 'llama-3.3-70b-versatile',
                 messages: messagesToLlm,
-                temperature: 0.4,
-                ...(availableTools.length > 0 && { tools: availableTools, tool_choice: 'auto' }),
-            }),
-        });
-
-        if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            console.error('[Groq] API Error:', JSON.stringify(errData, null, 2));
-            return res.json({
-                role: 'assistant',
-                content: `I'm having trouble connecting right now. Please try again in a moment.`
-            });
-        }
-
-        let data = await response.json();
-        let msg = data.choices[0].message;
-
-        // --- TOOL EXECUTION LOOP ---
-        if (msg.tool_calls?.length > 0) {
-            console.log(`[Chat] LLM requested ${msg.tool_calls.length} tool call(s).`);
-            messagesToLlm.push(msg);
-
-            for (const toolCall of msg.tool_calls) {
-                const { function: fn, id: toolCallId } = toolCall;
-                const connector = toolToConnector.get(fn.name);
-
-                if (connector) {
-                    try {
-                        console.log(`[Chat] Executing tool: ${fn.name}`);
-                        const result = await connector.client.callTool({
-                            name: fn.name,
-                            arguments: JSON.parse(fn.arguments || '{}')
-                        });
-
-                        // Pass raw result to LLM — LLM will translate it to English per system prompt
-                        messagesToLlm.push({
-                            role: 'tool',
-                            tool_call_id: toolCallId,
-                            content: JSON.stringify(result.content)
-                        });
-                    } catch (e) {
-                        console.error(`[Chat] Tool ${fn.name} failed:`, e.message);
-                        messagesToLlm.push({
-                            role: 'tool',
-                            tool_call_id: toolCallId,
-                            content: `The operation failed: ${e.message}`
-                        });
-                    }
-                } else {
-                    messagesToLlm.push({
-                        role: 'tool',
-                        tool_call_id: toolCallId,
-                        content: `Tool not available.`
-                    });
-                }
+                temperature: isDataQuestion ? 0 : 0.4,
+            };
+            if (includeTools && availableTools.length > 0) {
+                body.tools = availableTools;
+                body.tool_choice = isDataQuestion ? 'required' : 'auto';
             }
 
-            // --- SECOND LLM CALL: translate results into plain English ---
-            console.log(`[Chat] Summarising tool results into plain English...`);
-            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    Authorization: `Bearer ${GROQ_API_KEY}`
+                    Authorization: `Bearer ${GROQ_API_KEY}`,
                 },
-                body: JSON.stringify({
-                    model: 'llama-3.3-70b-versatile',
-                    messages: messagesToLlm,
-                    temperature: 0.4,
-                }),
+                body: JSON.stringify(body),
             });
 
-            if (response.ok) {
-                data = await response.json();
-                msg = data.choices[0].message;
-            } else {
-                console.error('[Groq] Second summarisation call failed');
-                msg = { role: 'assistant', content: "I retrieved the data but had trouble formatting the response. Please try again." };
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                console.error('[Groq] API Error:', JSON.stringify(errData, null, 2));
+                return null;
+            }
+
+            const data = await response.json();
+            return data.choices[0].message;
+        };
+
+        // --- TOOL EXECUTION LOOP ---
+        // Keep calling the LLM and executing tool calls until it gives a plain text reply.
+        const MAX_TOOL_ROUNDS = 8;
+        let round = 0;
+        let msg = await callGroq(true);
+
+        if (!msg) {
+            return res.json({
+                role: 'assistant',
+                content: "I'm having trouble connecting right now. Please try again in a moment.",
+            });
+        }
+
+        while (msg.tool_calls?.length > 0 && round < MAX_TOOL_ROUNDS) {
+            round++;
+            console.log(`[Chat] Tool round ${round}: ${msg.tool_calls.length} call(s).`);
+
+            // Append the assistant's tool-call message before the results
+            messagesToLlm.push(msg);
+
+            // Execute all tool calls in this round and append results
+            await executeToolCalls(msg.tool_calls, toolToConnector, messagesToLlm);
+
+            // Ask the LLM again — no tools on the final summarisation call
+            const isLastAllowedRound = round >= MAX_TOOL_ROUNDS;
+            msg = await callGroq(!isLastAllowedRound);
+
+            if (!msg) {
+                msg = {
+                    role: 'assistant',
+                    content: 'I retrieved the data but had trouble formatting the response. Please try again.',
+                };
+                break;
             }
         }
 
-        // Final safety strip — if the LLM leaked any code blocks, remove them
+        // Final safety strip — remove any code blocks the LLM leaked
         if (typeof msg.content === 'string') {
             msg.content = msg.content
                 .replace(/```[\s\S]*?```/g, '[data processed]')
-                .replace(/`[^`]+`/g, (match) => match.slice(1, -1)); // unwrap inline code
+                .replace(/`([^`]+)`/g, '$1');
         }
 
         res.json({ role: 'assistant', content: msg.content });
@@ -304,7 +331,7 @@ app.post('/api/chat', async (req, res) => {
         console.error('[Chat] Unexpected error:', error);
         res.status(500).json({
             role: 'assistant',
-            content: "Something went wrong on my end. Please try again."
+            content: 'Something went wrong on my end. Please try again.',
         });
     }
 });

@@ -135,7 +135,7 @@ app.delete('/api/connectors/:id', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------
-// System Prompt — optimised for Llama 3.3 70B on Groq
+// System Prompt
 // -----------------------------------------------------------------------
 const SYSTEM_PROMPT = `You are Atlas, an intelligent data assistant for the California DMV.
 You have direct access to live database tools — use them proactively.
@@ -222,48 +222,76 @@ function truncateIfNeeded(text, toolName) {
 async function executeToolCalls(toolCalls, toolToConnector, messagesToLlm) {
     for (const toolCall of toolCalls) {
         const { function: fn, id: toolCallId } = toolCall;
-        const connector = toolToConnector.get(fn.name);
 
+        // ----------------------------------------------------------------
+        // LLAMA BUG FIX: Llama 3.3 sometimes embeds JSON args directly in
+        // the tool name string, e.g.:
+        //   fn.name = 'list_tables {"dataset_id": "demo_mcp"}'
+        // instead of:
+        //   fn.name = 'list_tables', fn.arguments = '{"dataset_id": "demo_mcp"}'
+        //
+        // Detect the '{' in the name, split it out, parse the embedded JSON,
+        // and use the clean name for the connector lookup.
+        // ----------------------------------------------------------------
+        let toolName = fn.name || '';
         let parsedArgs = {};
-        try {
-            parsedArgs = JSON.parse(fn.arguments || '{}');
-        } catch (parseErr) {
-            console.warn(`[Chat] Could not parse args for ${fn.name}:`, fn.arguments);
+
+        const braceIdx = toolName.indexOf('{');
+        if (braceIdx !== -1) {
+            const embeddedJson = toolName.slice(braceIdx).trim();
+            toolName = toolName.slice(0, braceIdx).trim();
+            try {
+                parsedArgs = JSON.parse(embeddedJson);
+                console.warn(`[Chat] Fixed malformed tool name — extracted tool="${toolName}" args=`, parsedArgs);
+            } catch (e) {
+                console.warn(`[Chat] Could not parse embedded args from tool name:`, embeddedJson);
+            }
         }
+
+        // Merge with any properly-formatted args (fn.arguments takes precedence)
+        try {
+            const explicitArgs = JSON.parse(fn.arguments || '{}');
+            parsedArgs = { ...parsedArgs, ...explicitArgs };
+        } catch (parseErr) {
+            console.warn(`[Chat] Could not parse fn.arguments for ${toolName}:`, fn.arguments);
+        }
+
+        const connector = toolToConnector.get(toolName);
 
         if (connector) {
             try {
-                console.log(`[Chat] Executing tool: ${fn.name}`, parsedArgs);
+                console.log(`[Chat] Executing tool: ${toolName}`, parsedArgs);
                 const result = await connector.client.callTool({
-                    name: fn.name,
+                    name: toolName,
                     arguments: parsedArgs,
                 });
 
                 const rawText = extractMcpContent(result.content);
-                const finalText = truncateIfNeeded(rawText, fn.name);
+                const finalText = truncateIfNeeded(rawText, toolName);
 
-                console.log(`[Chat] Tool "${fn.name}" result (${finalText.length} chars):`, finalText.slice(0, 200));
+                console.log(`[Chat] Tool "${toolName}" result (${finalText.length} chars):`, finalText.slice(0, 200));
 
                 messagesToLlm.push({
                     role: 'tool',
                     tool_call_id: toolCallId,
-                    name: fn.name,
+                    name: toolName,
                     content: finalText,
                 });
             } catch (e) {
-                console.error(`[Chat] Tool ${fn.name} failed:`, e.message);
+                console.error(`[Chat] Tool ${toolName} failed:`, e.message);
                 messagesToLlm.push({
                     role: 'tool',
                     tool_call_id: toolCallId,
-                    name: fn.name,
+                    name: toolName,
                     content: `The operation failed: ${e.message}`,
                 });
             }
         } else {
+            console.warn(`[Chat] No connector found for tool: "${toolName}"`);
             messagesToLlm.push({
                 role: 'tool',
                 tool_call_id: toolCallId,
-                name: fn.name,
+                name: toolName,
                 content: 'Tool not available — no matching connector found.',
             });
         }
@@ -386,7 +414,9 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
+// -----------------------------------------------------------------------
 // GET /api/test-tool
+// -----------------------------------------------------------------------
 app.get('/api/test-tool', async (req, res) => {
     const toolName = req.query.name;
     if (!toolName) return res.status(400).json({ error: 'Pass ?name=<tool_name>' });

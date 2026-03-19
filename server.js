@@ -360,7 +360,7 @@ app.post('/api/chat', async (req, res) => {
             }));
 
             const body = {
-                model: 'llama-3.3-70b-versatile',
+                model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
                 messages: safeMessages,
                 temperature: 0.15,
                 max_tokens: 4096,

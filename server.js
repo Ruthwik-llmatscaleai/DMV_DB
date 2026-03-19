@@ -379,6 +379,27 @@ app.post('/api/chat', async (req, res) => {
 
         while (msg.tool_calls?.length > 0 && round < MAX_TOOL_ROUNDS) {
             round++;
+
+            // Sanitize tool calls in the assistant message before it enters
+            // the history. Llama 3.3 sometimes produces names like:
+            //   'list_tables {"dataset_id":"demo_mcp"}'
+            // Groq validates that every tool name in the history matches
+            // request.tools — the malformed name causes a 400.
+            for (const tc of msg.tool_calls) {
+                const braceIdx = tc.function.name.indexOf('{');
+                if (braceIdx !== -1) {
+                    const embeddedJson = tc.function.name.slice(braceIdx).trim();
+                    tc.function.name = tc.function.name.slice(0, braceIdx).trim();
+                    // Merge embedded args into fn.arguments so they aren't lost
+                    try {
+                        const embedded = JSON.parse(embeddedJson);
+                        const existing = JSON.parse(tc.function.arguments || '{}');
+                        tc.function.arguments = JSON.stringify({ ...embedded, ...existing });
+                    } catch { /* best-effort */ }
+                    console.warn(`[Chat] Sanitized malformed tool name → "${tc.function.name}"`);
+                }
+            }
+
             console.log(`[Chat] Tool round ${round}: ${msg.tool_calls.length} call(s) — ${msg.tool_calls.map(c => c.function?.name).join(', ')}`);
 
             messagesToLlm.push(msg);

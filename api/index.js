@@ -379,6 +379,22 @@ app.post('/api/chat', async (req, res) => {
 
         while (msg.tool_calls?.length > 0 && round < MAX_TOOL_ROUNDS) {
             round++;
+
+            // Sanitize malformed tool names before they enter the history
+            for (const tc of msg.tool_calls) {
+                const braceIdx = tc.function.name.indexOf('{');
+                if (braceIdx !== -1) {
+                    const embeddedJson = tc.function.name.slice(braceIdx).trim();
+                    tc.function.name = tc.function.name.slice(0, braceIdx).trim();
+                    try {
+                        const embedded = JSON.parse(embeddedJson);
+                        const existing = JSON.parse(tc.function.arguments || '{}');
+                        tc.function.arguments = JSON.stringify({ ...embedded, ...existing });
+                    } catch { /* best-effort */ }
+                    console.warn(`[Chat] Sanitized malformed tool name → "${tc.function.name}"`);
+                }
+            }
+
             console.log(`[Chat] Tool round ${round}: ${msg.tool_calls.length} call(s) — ${msg.tool_calls.map(c => c.function?.name).join(', ')}`);
 
             messagesToLlm.push(msg);

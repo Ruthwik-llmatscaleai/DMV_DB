@@ -3,7 +3,7 @@ import ConnectorsDropdown from '../components/ConnectorsDropdown';
 import ChatInput from '../components/ChatInput';
 import MessageRenderer from '../components/MessageRenderer';
 import {
-    MessageSquarePlus, Settings, LogOut, ShieldCheck,
+    MessageSquarePlus, LogOut, ShieldCheck,
     Trash2, ChevronDown, Copy, Check, RefreshCw, Database
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -161,14 +161,31 @@ export default function Chat() {
     const messagesEndRef = useRef(null);
     const messagesContainerRef = useRef(null);
 
-    const [threads, setThreads] = useState([
-        { id: Date.now(), title: 'New Session', messages: [WELCOME_MESSAGE] },
-    ]);
-    const [activeThreadId, setActiveThreadId] = useState(threads[0].id);
+    const THREADS_KEY = 'dmv_chat_threads';
+    const loadSavedThreads = () => {
+        try {
+            const saved = JSON.parse(localStorage.getItem(THREADS_KEY));
+            if (saved && saved.length > 0) return saved;
+        } catch { /* ignore */ }
+        return [{ id: Date.now(), title: 'New Session', messages: [WELCOME_MESSAGE] }];
+    };
+
+    const [threads, setThreads] = useState(loadSavedThreads);
+    const [activeThreadId, setActiveThreadId] = useState(() => {
+        const saved = loadSavedThreads();
+        return saved[0]?.id || Date.now();
+    });
     const [isLoading, setIsLoading] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     const [failedMessageId, setFailedMessageId] = useState(null);
     const [lastUserPayload, setLastUserPayload] = useState(null);
+
+    // Save threads to localStorage whenever they change
+    useEffect(() => {
+        try {
+            localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
+        } catch { /* quota exceeded — ignore */ }
+    }, [threads]);
 
     const activeThread = threads.find(t => t.id === activeThreadId) || threads[0];
 
@@ -194,29 +211,16 @@ export default function Chat() {
     }, []);
 
     // Core send logic, extracted so retry can reuse it
-    const sendMessage = useCallback(async ({ text, files }) => {
-        if (!text.trim() && files.length === 0) return;
+    const sendMessage = useCallback(async ({ text }) => {
+        if (!text.trim()) return;
 
-        let fileContentText = '';
-        const fileNames = [];
-        for (const file of files) {
-            fileNames.push(file.name);
-            try {
-                const fileText = await file.text();
-                fileContentText += `\n\n--- Uploaded file: ${file.name} ---\n${fileText}\n--- End of file ---\n`;
-            } catch (err) {
-                console.error('Could not read file:', file.name, err);
-            }
-        }
-
-        const fullPrompt = text + (fileContentText ? `\n\n[ATTACHED FILES]:${fileContentText}` : '');
+        const fullPrompt = text;
         const now = Date.now();
         const userMessage = {
             id: now,
             role: 'user',
             content: fullPrompt,
-            displayContent: text || 'Uploaded files.',
-            files: fileNames,
+            displayContent: text,
             timestamp: now,
         };
 
@@ -226,7 +230,7 @@ export default function Chat() {
             ? text.slice(0, 40) + (text.length > 40 ? '…' : '')
             : activeThread.title;
 
-        setLastUserPayload({ text, files });
+        setLastUserPayload({ text });
         setFailedMessageId(null);
 
         setThreads(prev => prev.map(t =>
@@ -302,7 +306,7 @@ export default function Chat() {
     };
 
     const handleQuickPrompt = (text) => {
-        sendMessage({ text, files: [] });
+        sendMessage({ text });
     };
 
     const handleNewChat = () => {
@@ -425,9 +429,6 @@ export default function Chat() {
                 </div>
 
                 <div className="p-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                    <button className="btn btn-ghost w-full justify-start gap-2 mb-1" style={{ padding: '0.5rem', fontSize: '0.875rem' }}>
-                        <Settings size={16} /> Settings
-                    </button>
                     <button
                         className="btn btn-ghost w-full justify-start gap-2"
                         style={{ padding: '0.5rem', fontSize: '0.875rem' }}
@@ -469,7 +470,7 @@ export default function Chat() {
                                 <div className={`message-avatar ${msg.role}`}>
                                     {msg.role === 'assistant'
                                         ? <ShieldCheck size={18} />
-                                        : <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>A</span>
+                                        : <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>U</span>
                                     }
                                 </div>
                                 <div className="message-content">

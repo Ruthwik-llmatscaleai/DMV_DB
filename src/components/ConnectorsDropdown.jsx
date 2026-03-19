@@ -48,6 +48,15 @@ export default function ConnectorsDropdown() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     };
 
+    const updateConnectorNameInStorage = (oldName, newName) => {
+        const saved = getSavedConnectors();
+        const entry = saved.find(s => s.name === oldName);
+        if (entry) {
+            entry.name = newName;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+        }
+    };
+
     const fetchConnectors = async () => {
         try {
             const res = await fetch(`${API_URL}/connectors`);
@@ -121,6 +130,10 @@ export default function ConnectorsDropdown() {
     const handleEditSave = async (id) => {
         if (!editName.trim()) return;
         try {
+            // Update localStorage name so it survives reloads
+            const connector = connectors.find(c => c.id === id);
+            if (connector) updateConnectorNameInStorage(connector.name, editName.trim());
+
             await fetch(`${API_URL}/connectors/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },

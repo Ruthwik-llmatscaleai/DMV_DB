@@ -11,6 +11,7 @@ export default function Login() {
   const handleLogin = (e) => {
     e.preventDefault();
     if (username === 'admin' && password === 'admin') {
+      sessionStorage.setItem('dmv_logged_in', 'true');
       navigate('/chat');
     } else {
       setError('Invalid credentials. Please use admin/admin.');

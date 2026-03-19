@@ -409,6 +409,12 @@ app.post('/api/chat', async (req, res) => {
             msg = await callGroq(!isLastAllowedRound);
 
             if (!msg) {
+                // Retry WITHOUT tools — force Llama to summarize what it already has
+                console.warn(`[Chat] callGroq failed after tool round ${round}, retrying without tools…`);
+                msg = await callGroq(false);
+            }
+
+            if (!msg) {
                 const detail = callGroq._lastError ? ` (${callGroq._lastError})` : '';
                 console.error(`[Chat] callGroq returned null after tool round ${round}${detail}`);
                 msg = {

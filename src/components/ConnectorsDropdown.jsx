@@ -10,6 +10,7 @@ export default function ConnectorsDropdown() {
     const [connectType, setConnectType] = useState('link'); // default to Link since BQ uses HTTP
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
+    const [editUrl, setEditUrl] = useState('');
     const [addError, setAddError] = useState('');
 
     const [newConnectorName, setNewConnectorName] = useState('');
@@ -48,11 +49,12 @@ export default function ConnectorsDropdown() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     };
 
-    const updateConnectorNameInStorage = (oldName, newName) => {
+    const updateConnectorInStorage = (oldName, newName, newUrl) => {
         const saved = getSavedConnectors();
         const entry = saved.find(s => s.name === oldName);
         if (entry) {
-            entry.name = newName;
+            if (newName) entry.name = newName;
+            if (newUrl) entry.url = newUrl;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
         }
     };
@@ -130,16 +132,21 @@ export default function ConnectorsDropdown() {
     const handleEditSave = async (id) => {
         if (!editName.trim()) return;
         try {
-            // Update localStorage name so it survives reloads
+            // Update localStorage so it survives reloads
             const connector = connectors.find(c => c.id === id);
-            if (connector) updateConnectorNameInStorage(connector.name, editName.trim());
+            const urlChanged = editUrl.trim() && editUrl.trim() !== (connector?.url || '');
+            if (connector) updateConnectorInStorage(connector.name, editName.trim(), urlChanged ? editUrl.trim() : null);
+
+            const body = { name: editName };
+            if (urlChanged) body.url = editUrl.trim();
 
             await fetch(`${API_URL}/connectors/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: editName }),
+                body: JSON.stringify(body),
             });
             setEditingId(null);
+            setEditUrl('');
             await fetchConnectors();
         } catch (e) {
             console.error('Edit failed', e);
@@ -396,23 +403,35 @@ export default function ConnectorsDropdown() {
                                 <div key={connector.id} className="connector-item">
                                     <div className="connector-info" style={{ flex: 1 }}>
                                         {editingId === connector.id ? (
-                                            <div className="flex items-center gap-1">
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
                                                 <input
                                                     autoFocus
                                                     type="text"
                                                     value={editName}
                                                     onChange={e => setEditName(e.target.value)}
+                                                    placeholder="Display name"
                                                     className="input p-1 text-xs"
+                                                    style={{ fontSize: '0.8rem' }}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    value={editUrl}
+                                                    onChange={e => setEditUrl(e.target.value)}
+                                                    placeholder="MCP URL (leave empty to keep current)"
+                                                    className="input p-1 text-xs"
+                                                    style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}
                                                     onKeyDown={e => e.key === 'Enter' && handleEditSave(connector.id)}
                                                 />
-                                                <button onClick={() => handleEditSave(connector.id)} className="text-success"><Check size={14} /></button>
-                                                <button onClick={() => setEditingId(null)} className="text-secondary"><X size={14} /></button>
+                                                <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
+                                                    <button onClick={() => handleEditSave(connector.id)} className="text-success" title="Save"><Check size={14} /></button>
+                                                    <button onClick={() => { setEditingId(null); setEditUrl(''); }} className="text-secondary" title="Cancel"><X size={14} /></button>
+                                                </div>
                                             </div>
                                         ) : (
                                             <div className="flex items-center gap-2">
                                                 <span className="connector-name">{connector.name}</span>
                                                 <button
-                                                    onClick={() => { setEditingId(connector.id); setEditName(connector.name); }}
+                                                    onClick={() => { setEditingId(connector.id); setEditName(connector.name); setEditUrl(''); }}
                                                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 0 }}
                                                 >
                                                     <Edit2 size={12} />

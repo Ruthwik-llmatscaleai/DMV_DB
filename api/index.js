@@ -117,11 +117,44 @@ app.post('/api/connectors', async (req, res) => {
     }
 });
 
-// PUT /api/connectors/:id
+// PUT /api/connectors/:id  — update name and/or reconnect to a new URL
 app.put('/api/connectors/:id', async (req, res) => {
     const { id } = req.params;
     if (!activeConnectors.has(id)) return res.status(404).json({ error: 'Not found' });
-    activeConnectors.get(id).name = req.body.name;
+
+    const connector = activeConnectors.get(id);
+    const { name, url } = req.body;
+
+    // Always update the display name if provided
+    if (name) connector.name = name;
+
+    // If a new URL was provided, tear down old connection and reconnect
+    if (url) {
+        try {
+            // Close old transport
+            try { await connector.transport.close(); } catch { /* ignore */ }
+
+            const transport = buildTransportFromUrl(url);
+            const client = new Client(
+                { name: 'DMV-UI-Client', version: '1.0.0' },
+                { capabilities: { tools: {} } }
+            );
+
+            connector.transport = transport;
+            connector.client = client;
+            connector.status = 'connecting';
+
+            console.log(`[MCP] Reconnecting ${connector.name} to ${url}…`);
+            await client.connect(transport);
+            connector.status = 'connected';
+            console.log(`[MCP] ✅ Reconnected ${connector.name} to ${url}`);
+        } catch (error) {
+            console.error(`[MCP] ❌ Reconnect failed for ${connector.name}:`, error.message);
+            connector.status = 'error';
+            return res.status(500).json({ error: error.message || 'Reconnect failed' });
+        }
+    }
+
     res.json({ success: true });
 });
 

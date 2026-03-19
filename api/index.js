@@ -372,6 +372,11 @@ app.post('/api/chat', async (req, res) => {
                 body.parallel_tool_calls = false;
             }
 
+            let bodyStr = JSON.stringify(body);
+            // Foolproof regex to strip JSON embedded in tool names before it reaches Groq
+            // Matches: "name":"list_tables {"dataset_id"...}"
+            bodyStr = bodyStr.replace(/"name":"([a-zA-Z0-9_-]+)\s*\{[^}]+\}"/g, '"name":"$1"');
+
             // Retry loop for rate limits (429)
             const MAX_RETRIES = 3;
             let response, attempt;
@@ -382,7 +387,7 @@ app.post('/api/chat', async (req, res) => {
                         'Content-Type': 'application/json',
                         Authorization: `Bearer ${GROQ_API_KEY}`,
                     },
-                    body: JSON.stringify(body),
+                    body: bodyStr,
                 });
 
                 if (response.status === 429 && attempt < MAX_RETRIES) {

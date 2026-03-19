@@ -18,7 +18,35 @@ export default function ConnectorsDropdown() {
     const [newConnectorUrl, setNewConnectorUrl] = useState('');
 
     const [connectors, setConnectors] = useState([]);
+    const [autoReconnecting, setAutoReconnecting] = useState(false);
     const API_URL = import.meta.env.VITE_API_URL || '/api';
+
+    // ---------------------------------------------------------------
+    // localStorage helpers – persist connector URLs across reloads
+    // ---------------------------------------------------------------
+    const STORAGE_KEY = 'dmv_saved_connectors';
+
+    const getSavedConnectors = () => {
+        try {
+            return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        } catch { return []; }
+    };
+
+    const saveConnectorToStorage = (name, url) => {
+        const saved = getSavedConnectors();
+        // Avoid duplicates by URL
+        if (!saved.some(s => s.url === url)) {
+            saved.push({ name, url });
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+        }
+    };
+
+    const removeConnectorFromStorage = (urlOrName) => {
+        const saved = getSavedConnectors().filter(
+            s => s.url !== urlOrName && s.name !== urlOrName
+        );
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+    };
 
     const fetchConnectors = async () => {
         try {
@@ -30,8 +58,43 @@ export default function ConnectorsDropdown() {
         }
     };
 
+    // Auto-reconnect saved connectors on mount (handles Vercel cold starts & reloads)
+    const autoReconnectSavedConnectors = async () => {
+        const saved = getSavedConnectors();
+        if (saved.length === 0) return;
+
+        setAutoReconnecting(true);
+        try {
+            // Check which connectors are already active
+            const res = await fetch(`${API_URL}/connectors`);
+            const active = await res.json();
+            const activeNames = active.map(c => c.name);
+
+            for (const s of saved) {
+                // Skip if already connected (by name match)
+                if (activeNames.includes(s.name) || activeNames.includes(s.url)) continue;
+
+                try {
+                    console.log(`[AutoReconnect] Reconnecting to ${s.name || s.url}…`);
+                    await fetch(`${API_URL}/connectors`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: s.name, url: s.url }),
+                    });
+                } catch (e) {
+                    console.warn(`[AutoReconnect] Failed to reconnect ${s.name}:`, e.message);
+                }
+            }
+        } catch (e) {
+            console.warn('[AutoReconnect] Could not check active connectors:', e.message);
+        } finally {
+            setAutoReconnecting(false);
+            fetchConnectors();
+        }
+    };
+
     useEffect(() => {
-        fetchConnectors();
+        autoReconnectSavedConnectors();
         const interval = setInterval(fetchConnectors, 5000);
         return () => clearInterval(interval);
     }, []);
@@ -46,6 +109,10 @@ export default function ConnectorsDropdown() {
 
     const handleDelete = async (id) => {
         if (confirm('Are you sure you want to remove this connector?')) {
+            // Find the connector to remove from localStorage by name
+            const toRemove = connectors.find(c => c.id === id);
+            if (toRemove) removeConnectorFromStorage(toRemove.name);
+
             await fetch(`${API_URL}/connectors/${id}`, { method: 'DELETE' });
             await fetchConnectors();
         }
@@ -114,6 +181,14 @@ export default function ConnectorsDropdown() {
                 setAddError(respData.error || 'Failed to connect. Check the server console.');
                 setIsConnecting(false);
                 return; // ← CRITICAL: stop here, don't close the form
+            }
+
+            // Save to localStorage for persistence across reloads
+            if (connectType === 'link' && newConnectorUrl.trim()) {
+                saveConnectorToStorage(
+                    newConnectorName.trim() || newConnectorUrl.trim(),
+                    newConnectorUrl.trim()
+                );
             }
 
             // Only reset form on actual success
@@ -291,7 +366,12 @@ export default function ConnectorsDropdown() {
                     )}
 
                     <div style={{ maxHeight: '250px', overflowY: 'auto' }}>
-                        {connectors.length === 0 && !isAddingMode && (
+                        {autoReconnecting && (
+                            <div style={{ padding: '0.75rem', textAlign: 'center', fontSize: '0.8rem', color: 'var(--accent)' }}>
+                                Reconnecting saved servers…
+                            </div>
+                        )}
+                        {connectors.length === 0 && !isAddingMode && !autoReconnecting && (
                             <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
                                 No servers connected.
                             </div>

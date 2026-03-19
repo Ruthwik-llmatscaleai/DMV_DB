@@ -372,14 +372,37 @@ app.post('/api/chat', async (req, res) => {
                 body.parallel_tool_calls = false;
             }
 
-            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${GROQ_API_KEY}`,
-                },
-                body: JSON.stringify(body),
-            });
+            // Retry loop for rate limits (429)
+            const MAX_RETRIES = 3;
+            let response, attempt;
+            for (attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${GROQ_API_KEY}`,
+                    },
+                    body: JSON.stringify(body),
+                });
+
+                if (response.status === 429 && attempt < MAX_RETRIES) {
+                    // Parse wait time from response or use exponential backoff
+                    let waitSec = 2 * (attempt + 1); // default: 2s, 4s, 6s
+                    try {
+                        const retryAfter = response.headers.get('retry-after');
+                        if (retryAfter) waitSec = Math.ceil(parseFloat(retryAfter));
+                        else {
+                            const errBody = await response.json().catch(() => ({}));
+                            const match = errBody?.error?.message?.match(/try again in (\d+\.?\d*)s/i);
+                            if (match) waitSec = Math.ceil(parseFloat(match[1]));
+                        }
+                    } catch { /* use default */ }
+                    console.log(`[Groq] 429 rate-limited — waiting ${waitSec}s before retry ${attempt + 1}/${MAX_RETRIES}…`);
+                    await new Promise(r => setTimeout(r, waitSec * 1000));
+                    continue;
+                }
+                break; // success or non-429 error
+            }
 
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({}));

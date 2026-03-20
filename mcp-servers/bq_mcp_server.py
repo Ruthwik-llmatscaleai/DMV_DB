@@ -75,6 +75,72 @@ def execute_unrestricted_sql(
         "rows": rows,
     }
 
+@mcp.tool()
+def get_table_schema(table_id: str, dataset_id: str = "demo_mcp") -> List[Dict[str, str]]:
+    """Get the schema (columns, types, modes) of a specific BigQuery table. Use this to find out what columns are needed for a table."""
+    client = _bq_client()
+    project = client.project or "genai-poc-424806"
+    table_ref = f"{project}.{dataset_id}.{table_id}"
+    
+    try:
+        table = client.get_table(table_ref)
+        return [{"name": f.name, "field_type": f.field_type, "mode": f.mode} for f in table.schema]
+    except Exception as e:
+        return [{"error": str(e)}]
+
+@mcp.tool()
+def insert_record(table_id: str, row_data: Dict[str, Any], dataset_id: str = "demo_mcp") -> str:
+    """
+    Insert a single record into a BigQuery table. 
+    `row_data` must be a dictionary mapping column names to values. 
+    Make sure to check the table schema first using get_table_schema.
+    For IDs, you can generate random/timestamp values if NOT NULL.
+    """
+    client = _bq_client()
+    project = client.project or "genai-poc-424806"
+    
+    if not row_data:
+        return "Error: row_data cannot be empty."
+        
+    columns = list(row_data.keys())
+    query_params = []
+    param_names = []
+    
+    for idx, col in enumerate(columns):
+        param_name = f"param_{idx}"
+        param_names.append(f"@{param_name}")
+        val = row_data[col]
+        # Infer type for ScalarQueryParameter
+        if isinstance(val, int):
+            bq_type = "INT64"
+        elif isinstance(val, float):
+            bq_type = "FLOAT64"
+        elif isinstance(val, bool):
+            bq_type = "BOOL"
+        else:
+            bq_type = "STRING"
+            val = str(val)
+            
+        query_params.append(bigquery.ScalarQueryParameter(param_name, bq_type, val))
+        
+    cols_str = ", ".join(columns)
+    vals_str = ", ".join(param_names)
+    
+    query = f"""
+    INSERT INTO `{project}.{dataset_id}.{table_id}` 
+    ({cols_str})
+    VALUES ({vals_str})
+    """
+    
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    
+    try:
+        job = client.query(query, job_config=job_config)
+        job.result() # Wait for completion
+        return f"Successfully inserted record into {table_id}."
+    except Exception as e:
+        return f"Error inserting record: {str(e)}"
+
 if __name__ == "__main__":
     port = 8000
     mcp.run(

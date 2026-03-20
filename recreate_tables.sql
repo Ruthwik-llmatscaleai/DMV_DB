@@ -24,3 +24,13 @@ CREATE TABLE `genai-poc-424806.demo_mcp.Product`
   price NUMERIC,
   is_active BOOL
 );
+
+CREATE TABLE `genai-poc-424806.demo_mcp.SalesOrder`
+(
+  order_id INT64 NOT NULL,
+  customer_id INT64 NOT NULL,
+  product_id INT64 NOT NULL,
+  quantity INT64,
+  total_price NUMERIC,
+  order_date TIMESTAMP
+);

@@ -9,10 +9,9 @@ import React from 'react';
 export default function MessageRenderer({ content, role }) {
     if (!content) return null;
 
-    // Strip any escaped code blocks that snuck through
+    // Strip any inline backticks that snuck through, but keep multiline code blocks
     const sanitised = content
-        .replace(/```[\s\S]*?```/g, '')
-        .replace(/`([^`]+)`/g, '$1')
+        .replace(/`([^`\n]+)`/g, '$1')
         .trim();
 
     const lines = sanitised.split('\n');

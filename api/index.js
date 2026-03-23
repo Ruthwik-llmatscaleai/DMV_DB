@@ -486,7 +486,6 @@ app.post('/api/chat', async (req, res) => {
 
         if (typeof msg.content === 'string') {
             msg.content = msg.content
-                .replace(/```[\s\S]*?```/g, '[data processed]')
                 .replace(/`([^`]+)`/g, '$1');
         }
 

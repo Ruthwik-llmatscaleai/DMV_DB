@@ -134,7 +134,12 @@ app.put('/api/connectors/:id', async (req, res) => {
             // Close old transport
             try { await connector.transport.close(); } catch { /* ignore */ }
 
-            const transport = buildTransportFromUrl(url);
+            let requestInit = { headers: {} };
+            if (url.includes('zrok.io')) {
+                requestInit.headers['Authorization'] = 'Bearer zrok-secure-secret-token-123';
+            }
+            
+            const transport = new SSEClientTransport(new URL(url), requestInit);
             const client = new Client(
                 { name: 'DMV-UI-Client', version: '1.0.0' },
                 { capabilities: { tools: {} } }

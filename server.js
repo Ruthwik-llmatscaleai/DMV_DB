@@ -134,12 +134,25 @@ app.put('/api/connectors/:id', async (req, res) => {
             // Close old transport
             try { await connector.transport.close(); } catch { /* ignore */ }
 
-            let requestInit = { headers: {} };
+            let transportOpts = {};
             if (url.includes('zrok.io')) {
-                requestInit.headers['Authorization'] = 'Bearer zrok-secure-secret-token-123';
+                const zrokToken = 'Bearer zrok-secure-secret-token-123';
+                transportOpts = {
+                    requestInit: { headers: { 'Authorization': zrokToken } },
+                    fetch: (input, init) => {
+                        init = init || {};
+                        init.headers = init.headers || {};
+                        if (typeof init.headers.set === 'function') {
+                            init.headers.set('Authorization', zrokToken);
+                        } else {
+                            init.headers['Authorization'] = zrokToken;
+                        }
+                        return fetch(input, init);
+                    }
+                };
             }
             
-            const transport = new SSEClientTransport(new URL(url), requestInit);
+            const transport = new SSEClientTransport(new URL(url), transportOpts);
             const client = new Client(
                 { name: 'DMV-UI-Client', version: '1.0.0' },
                 { capabilities: { tools: {} } }

@@ -221,17 +221,6 @@ Chain multiple tool calls as needed. There is no limit.
 // -----------------------------------------------------------------------
 // Helper — build tool registry from all connected connectors
 // -----------------------------------------------------------------------
-// Dangerous tools that must NEVER be exposed to the LLM, regardless of which
-// connector provides them.  This is the last line of defence against prompt
-// injection attacks that try to call raw-SQL execution tools.
-const BLOCKED_TOOLS = new Set([
-    'execute_unrestricted_sql',
-    'execute_sql',
-    'run_query',
-    'raw_query',
-    'insert_record',
-]);
-
 async function buildToolRegistry() {
     const availableTools = [];
     const toolToConnector = new Map();
@@ -241,10 +230,6 @@ async function buildToolRegistry() {
         try {
             const { tools = [] } = await c.client.listTools();
             for (const tool of tools) {
-                if (BLOCKED_TOOLS.has(tool.name)) {
-                    console.warn(`[MCP] \u26d4 Blocked dangerous tool "${tool.name}" from connector "${c.name}"`);
-                    continue;
-                }
                 availableTools.push({
                     type: 'function',
                     function: {

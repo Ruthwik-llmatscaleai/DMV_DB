@@ -33,22 +33,45 @@ function buildTransportFromUrl(rawUrl) {
 
     const parsed = new URL(formattedUrl);
     const isLegacySSE = parsed.pathname.endsWith('/sse');
+    const isZrok = parsed.hostname.includes('zrok.io');
+    const ZROK_TOKEN = 'Bearer zrok-secure-secret-token-123';
 
     const headers = {
         'ngrok-skip-browser-warning': 'true',
         'User-Agent': 'DMV-DB-Connect-Client/1.0.0',
     };
+    if (isZrok) {
+        headers['Authorization'] = ZROK_TOKEN;
+    }
 
-    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}`);
+    // Custom fetch interceptor — forces Authorization onto every request the SDK makes,
+    // including the POST /messages calls where the SDK otherwise overwrites headers.
+    const customFetch = isZrok
+        ? (input, init) => {
+            init = init || {};
+            if (typeof init.headers === 'object' && typeof init.headers.set === 'function') {
+                init.headers.set('Authorization', ZROK_TOKEN);
+            } else {
+                init.headers = { ...(init.headers || {}), 'Authorization': ZROK_TOKEN };
+            }
+            return fetch(input, init);
+        }
+        : undefined;
+
+    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isZrok ? ' [secured]' : ''}`);
 
     if (isLegacySSE) {
         return new SSEClientTransport(parsed, {
             eventSourceInit: { headers },
             requestInit: { headers },
+            ...(customFetch ? { fetch: customFetch } : {}),
         });
     }
 
-    return new StreamableHTTPClientTransport(parsed, { requestInit: { headers } });
+    return new StreamableHTTPClientTransport(parsed, {
+        requestInit: { headers },
+        ...(customFetch ? { fetch: customFetch } : {}),
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -134,25 +157,7 @@ app.put('/api/connectors/:id', async (req, res) => {
             // Close old transport
             try { await connector.transport.close(); } catch { /* ignore */ }
 
-            let transportOpts = {};
-            if (url.includes('zrok.io')) {
-                const zrokToken = 'Bearer zrok-secure-secret-token-123';
-                transportOpts = {
-                    requestInit: { headers: { 'Authorization': zrokToken } },
-                    fetch: (input, init) => {
-                        init = init || {};
-                        init.headers = init.headers || {};
-                        if (typeof init.headers.set === 'function') {
-                            init.headers.set('Authorization', zrokToken);
-                        } else {
-                            init.headers['Authorization'] = zrokToken;
-                        }
-                        return fetch(input, init);
-                    }
-                };
-            }
-            
-            const transport = new SSEClientTransport(new URL(url), transportOpts);
+            const transport = buildTransportFromUrl(url);
             const client = new Client(
                 { name: 'DMV-UI-Client', version: '1.0.0' },
                 { capabilities: { tools: {} } }

@@ -1,150 +1,112 @@
-import os
-from typing import Any, Dict, List, Optional
-from google.cloud import bigquery
-from fastmcp import FastMCP
+"""
+Layer 2 — MCP Protocol Server (Secured)
+========================================
+Exposes ONLY predefined, named tools via FastMCP.
 
-# Define specialized instructions to ensure the LLM uses BigQuery-compatible SQL
-# and prefers the provided metadata tools over raw 'SHOW' statements.
+Removed:
+  ❌ execute_unrestricted_sql
+  ❌ insert_record (generic raw insert)
+
+All tools delegate to db.py which handles parameterization and PII scrubbing.
+Binds to 127.0.0.1 only — not accessible from external networks.
+"""
+
+import os
+from typing import Any, Dict, List
+from fastmcp import FastMCP
+import db
+
 INSTRUCTIONS = """
-You are a BigQuery expert. 
-1. BigQuery does NOT support 'SHOW TABLES' or 'SHOW DATABASES'. 
-2. Use 'list_datasets' and 'list_tables' tools for discovery.
-3. If you must use raw SQL for metadata, query 'INFORMATION_SCHEMA.TABLES' or 'INFORMATION_SCHEMA.SCHEMATA'.
-4. Always use Standard SQL syntax (e.g., use backticks `project.dataset.table` for table names).
+You are a BigQuery data assistant.
+1. Use 'list_datasets' and 'list_tables' tools for discovery.
+2. Use 'get_table_schema' to inspect columns before querying.
+3. Use the specific query tools (get_sales_orders, get_customer_by_id, etc.) to retrieve data.
+4. Use 'insert_sales_order' to create new orders.
+5. You do NOT have access to run arbitrary SQL. Only the tools listed here are available.
 """
 
 mcp = FastMCP(
-    "custom-bigquery-unrestricted",
+    "secure-bigquery-mcp",
     instructions=INSTRUCTIONS
 )
 
-def _bq_client() -> bigquery.Client:
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if not project:
-        # Fallback to default project if possible
-        return bigquery.Client()
-    return bigquery.Client(project=project)
+
+# ── Discovery Tools ──────────────────────────────────────────────────────
 
 @mcp.tool()
 def list_datasets() -> List[str]:
     """List all available datasets in the current BigQuery project."""
-    client = _bq_client()
-    datasets = list(client.list_datasets())
-    return [d.dataset_id for d in datasets]
+    return db.list_datasets()
+
 
 @mcp.tool()
 def list_tables(dataset_id: str) -> List[str]:
     """List all tables in a specific BigQuery dataset."""
-    client = _bq_client()
-    tables = list(client.list_tables(dataset_id))
-    return [t.table_id for t in tables]
+    return db.list_tables(dataset_id)
 
-@mcp.tool()
-def execute_unrestricted_sql(
-    query: str, maximum_bytes_billed: Optional[int] = None
-) -> Dict[str, Any]:
-    """
-    Execute arbitrary BigQuery Standard SQL (DDL/DML/SELECT).
-    WARNING: This intentionally does not restrict writes.
-    
-    Note: DO NOT use 'SHOW' statements. Use INFORMATION_SCHEMA for metadata if needed.
-    """
-    client = _bq_client()
-    job_config = None
-    if maximum_bytes_billed is not None:
-        job_config = bigquery.QueryJobConfig(maximum_bytes_billed=maximum_bytes_billed)
-    
-    # Simple syntax check/patch for common LLM mistakes
-    query_clean = query.strip()
-    if query_clean.upper().startswith("SHOW "):
-        raise ValueError("BigQuery does not support 'SHOW' statements. Use 'list_datasets', 'list_tables', or query 'INFORMATION_SCHEMA'.")
-
-    job = client.query(query_clean, job_config=job_config)
-    result = job.result()
-    rows: List[Dict[str, Any]] = []
-    schema_fields = [f.name for f in (result.schema or [])]
-    for row in result:
-        rows.append({name: row.get(name) for name in schema_fields})
-    return {
-        "project": client.project,
-        "job_id": job.job_id,
-        "statement_type": getattr(job, "statement_type", None),
-        "total_bytes_processed": getattr(job, "total_bytes_processed", None),
-        "total_bytes_billed": getattr(job, "total_bytes_billed", None),
-        "num_dml_affected_rows": getattr(job, "num_dml_affected_rows", None),
-        "rows": rows,
-    }
 
 @mcp.tool()
 def get_table_schema(table_id: str, dataset_id: str = "demo_mcp") -> List[Dict[str, str]]:
-    """Get the schema (columns, types, modes) of a specific BigQuery table. Use this to find out what columns are needed for a table."""
-    client = _bq_client()
-    project = client.project or "genai-poc-424806"
-    table_ref = f"{project}.{dataset_id}.{table_id}"
-    
-    try:
-        table = client.get_table(table_ref)
-        return [{"name": f.name, "field_type": f.field_type, "mode": f.mode} for f in table.schema]
-    except Exception as e:
-        return [{"error": str(e)}]
+    """Get the schema (columns, types, modes) of a specific BigQuery table."""
+    return db.get_table_schema(table_id, dataset_id)
+
+
+# ── Sales Order Tools ────────────────────────────────────────────────────
 
 @mcp.tool()
-def insert_record(table_id: str, row_data: Dict[str, Any], dataset_id: str = "demo_mcp") -> str:
-    """
-    Insert a single record into a BigQuery table. 
-    `row_data` must be a dictionary mapping column names to values. 
-    Make sure to check the table schema first using get_table_schema.
-    For IDs, you can generate random/timestamp values if NOT NULL.
-    """
-    client = _bq_client()
-    project = client.project or "genai-poc-424806"
-    
-    if not row_data:
-        return "Error: row_data cannot be empty."
-        
-    columns = list(row_data.keys())
-    query_params = []
-    param_names = []
-    
-    for idx, col in enumerate(columns):
-        param_name = f"param_{idx}"
-        param_names.append(f"@{param_name}")
-        val = row_data[col]
-        # Infer type for ScalarQueryParameter
-        if isinstance(val, int):
-            bq_type = "INT64"
-        elif isinstance(val, float):
-            bq_type = "FLOAT64"
-        elif isinstance(val, bool):
-            bq_type = "BOOL"
-        else:
-            bq_type = "STRING"
-            val = str(val)
-            
-        query_params.append(bigquery.ScalarQueryParameter(param_name, bq_type, val))
-        
-    cols_str = ", ".join(columns)
-    vals_str = ", ".join(param_names)
-    
-    query = f"""
-    INSERT INTO `{project}.{dataset_id}.{table_id}` 
-    ({cols_str})
-    VALUES ({vals_str})
-    """
-    
-    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
-    
-    try:
-        job = client.query(query, job_config=job_config)
-        job.result() # Wait for completion
-        return f"Successfully inserted record into {table_id}."
-    except Exception as e:
-        return f"Error inserting record: {str(e)}"
+def get_sales_orders(limit: int = 10) -> List[Dict[str, Any]]:
+    """Retrieve recent sales orders joined with customer data. Max 1000."""
+    return db.get_sales_orders(limit=limit)
+
+
+@mcp.tool()
+def get_order_by_id(order_id: str) -> List[Dict[str, Any]]:
+    """Retrieve a single sales order by its order_id."""
+    return db.get_order_by_id(order_id)
+
+
+@mcp.tool()
+def insert_sales_order(
+    order_id: str,
+    customer_id: str,
+    product_id: int,
+    quantity: int,
+    order_amount: float,
+    product_category: str,
+    payment_method: str,
+) -> str:
+    """Insert a new sales order. All fields are required."""
+    return db.insert_sales_order(
+        order_id=order_id,
+        customer_id=customer_id,
+        product_id=product_id,
+        quantity=quantity,
+        order_amount=order_amount,
+        product_category=product_category,
+        payment_method=payment_method,
+    )
+
+
+# ── Customer Tools ───────────────────────────────────────────────────────
+
+@mcp.tool()
+def get_customer_by_id(customer_id: str) -> List[Dict[str, Any]]:
+    """Retrieve a single customer by customer_id. PII fields are automatically redacted."""
+    return db.get_customer_by_id(customer_id)
+
+
+@mcp.tool()
+def list_customers(limit: int = 50) -> List[Dict[str, Any]]:
+    """List customers. PII fields are automatically redacted. Max 1000."""
+    return db.list_customers(limit=limit)
+
+
+# ── Entry Point ──────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    port = 8000
+    port = int(os.environ.get("MCP_PORT", 8000))
     mcp.run(
         transport="http",
-        host="0.0.0.0",     
+        host="127.0.0.1",
         port=port,
     )

@@ -27,10 +27,11 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 // -----------------------------------------------------------------------
 // Auto-Initialization (Connect to Cloud Run MCP automatically)
 // -----------------------------------------------------------------------
-const DEFAULT_MCP_URL = process.env.DEFAULT_MCP_URL || 'https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/sse';
+const DEFAULT_MCP_URL = process.env.DEFAULT_MCP_URL;
 const DEFAULT_CONNECTOR_ID = 'default-cloud-run-mcp';
 
 async function autoConnectTodefaultMcp() {
+    if (!DEFAULT_MCP_URL) return;
     try {
         console.log(`[System] Auto-connecting to default MCP server: ${DEFAULT_MCP_URL}`);
         const transport = buildTransportFromUrl(DEFAULT_MCP_URL);

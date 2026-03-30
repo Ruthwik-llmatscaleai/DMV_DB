@@ -33,32 +33,32 @@ function buildTransportFromUrl(rawUrl) {
 
     const parsed = new URL(formattedUrl);
     const isLegacySSE = parsed.pathname.endsWith('/sse');
-    const isZrok = parsed.hostname.includes('zrok.io');
-    const ZROK_TOKEN = 'Bearer zrok-secure-secret-token-123';
+    const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
+    const SECURE_TOKEN = 'Bearer zrok-secure-secret-token-123';
 
     const headers = {
         'ngrok-skip-browser-warning': 'true',
         'User-Agent': 'DMV-DB-Connect-Client/1.0.0',
     };
-    if (isZrok) {
-        headers['Authorization'] = ZROK_TOKEN;
+    if (isSecureTunnel) {
+        headers['Authorization'] = SECURE_TOKEN;
     }
 
     // Custom fetch interceptor — forces Authorization onto every request the SDK makes,
     // including the POST /messages calls where the SDK otherwise overwrites headers.
-    const customFetch = isZrok
+    const customFetch = isSecureTunnel
         ? (input, init) => {
             init = init || {};
             if (typeof init.headers === 'object' && typeof init.headers.set === 'function') {
-                init.headers.set('Authorization', ZROK_TOKEN);
+                init.headers.set('Authorization', SECURE_TOKEN);
             } else {
-                init.headers = { ...(init.headers || {}), 'Authorization': ZROK_TOKEN };
+                init.headers = { ...(init.headers || {}), 'Authorization': SECURE_TOKEN };
             }
             return fetch(input, init);
         }
         : undefined;
 
-    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isZrok ? ' [secured]' : ''}`);
+    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isSecureTunnel ? ' [secured]' : ''}`);
 
     if (isLegacySSE) {
         return new SSEClientTransport(parsed, {
@@ -577,7 +577,7 @@ const distPath = path.join(__dirname, 'dist');
 
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.use((req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
     });
 }

@@ -5,8 +5,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ServicesClient } from '@google-cloud/run';
 
 dotenv.config();
+
+const runClient = new ServicesClient();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,10 +22,90 @@ app.use(cors({
 app.use(express.json());
 
 // -----------------------------------------------------------------------
-// State
+// State & Connection Helpers
 // -----------------------------------------------------------------------
 const activeConnectors = new Map();
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+/**
+ * Connects to a specific MCP server URL and adds it to the active pool.
+ */
+async function connectToMcp(url, displayName) {
+    const id = generateId();
+    try {
+        const transport = buildTransportFromUrl(url);
+        const client = new Client(
+            { name: 'DMV-UI-Client', version: '1.0.0' },
+            { capabilities: { tools: {} } }
+        );
+        
+        activeConnectors.set(id, { 
+            name: displayName, 
+            client, 
+            transport, 
+            status: 'connecting' 
+        });
+
+        const timer = setTimeout(() => {
+            if (activeConnectors.get(id)?.status === 'connecting')
+                console.error(`[System] Timeout connecting to ${displayName}`);
+        }, 15_000);
+
+        await client.connect(transport);
+        clearTimeout(timer);
+
+        activeConnectors.get(id).status = 'connected';
+        console.log(`[System] ✅ Successfully connected to ${displayName}!`);
+        return true;
+    } catch (error) {
+        console.error(`[System] ❌ Failed to connect to ${displayName}:`, error.message);
+        if (activeConnectors.has(id)) {
+             activeConnectors.get(id).status = 'error';
+        }
+        return false;
+    }
+}
+
+/**
+ * Automatically discovers MCP services in GCP with the 'mcp-connector=true' label.
+ */
+async function autoDiscoverMcps() {
+    try {
+        const project = process.env.GOOGLE_CLOUD_PROJECT || 'genai-poc-424806';
+        const location = process.env.GOOGLE_CLOUD_REGION || 'us-central1';
+        const parent = `projects/${project}/locations/${location}`;
+        
+        console.log(`[Discovery] Scanning GCP for MCP connectors in ${location}...`);
+        const [services] = await runClient.listServices({ parent });
+        
+        const mcpServices = services.filter(svc => 
+            svc.labels && svc.labels['mcp-connector'] === 'true'
+        );
+
+        if (mcpServices.length === 0) {
+            console.log(`[Discovery] No labeled MCP services found.`);
+            return;
+        }
+
+        console.log(`[Discovery] Found ${mcpServices.length} labeled services.`);
+        for (const svc of mcpServices) {
+            // Cloud Run service URIs are the base URLs. We append /sse for the MCP endpoint.
+            const url = svc.uri + '/sse';
+            const name = svc.labels['mcp-name'] || svc.name.split('/').pop().replace(/-/g, ' ').toUpperCase();
+            
+            // Check if already connected by searching URLs
+            const alreadyConnected = Array.from(activeConnectors.values()).some(c => c.transport?.url?.href?.includes(svc.uri));
+            if (!alreadyConnected) {
+                await connectToMcp(url, name);
+            }
+        }
+    } catch (err) {
+        console.error(`[Discovery] Error during GCP scan:`, err.message);
+    }
+}
+
+// Trigger discovery on startup and then periodically or upon request
+autoDiscoverMcps();
 
 function buildTransportFromUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();

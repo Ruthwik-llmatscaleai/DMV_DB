@@ -1,0 +1,7 @@
+[
+  {
+    "name": "DMV Production Database",
+    "url": "https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/sse",
+    "type": "mcp"
+  }
+]

@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import fs from 'fs';
+import path from 'path';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -23,6 +25,67 @@ app.use(express.json());
 // -----------------------------------------------------------------------
 const activeConnectors = new Map();
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+/**
+ * Connects to an MCP URL and adds it to the active pool.
+ */
+async function connectToMcp(url, displayName) {
+    const id = generateId();
+    try {
+        const transport = buildTransportFromUrl(url);
+        const client = new Client(
+            { name: 'DMV-UI-Client', version: '1.0.0' },
+            { capabilities: { tools: {} } }
+        );
+        
+        activeConnectors.set(id, { 
+            name: displayName, 
+            client, 
+            transport, 
+            status: 'connecting' 
+        });
+
+        const timer = setTimeout(() => {
+            if (activeConnectors.get(id)?.status === 'connecting')
+                console.error(`[System] Timeout connecting to ${displayName}`);
+        }, 15_000);
+
+        await client.connect(transport);
+        clearTimeout(timer);
+
+        activeConnectors.get(id).status = 'connected';
+        console.log(`[System] ✅ Successfully connected to ${displayName}!`);
+        return true;
+    } catch (error) {
+        console.error(`[System] ❌ Failed to connect to ${displayName}:`, error.message);
+        if (activeConnectors.has(id)) {
+             activeConnectors.get(id).status = 'error';
+        }
+        return false;
+    }
+}
+
+/**
+ * Reads mcp_registry.json and connects to all listed MCPs.
+ */
+async function autoConnectFromRegistry() {
+    try {
+        const registryPath = path.join(process.cwd(), 'mcp_registry.json');
+        if (fs.existsSync(registryPath)) {
+            const data = fs.readFileSync(registryPath, 'utf8');
+            const connectors = JSON.parse(data);
+            console.log(`[System] Loading ${connectors.length} MCPs from registry...`);
+            for (const { name, url } of connectors) {
+                await connectToMcp(url, name);
+            }
+        }
+    } catch (err) {
+        console.error(`[System] Error loading MCP registry:`, err.message);
+    }
+}
+
+// Start-up auto-connect
+autoConnectFromRegistry();
 
 function buildTransportFromUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();

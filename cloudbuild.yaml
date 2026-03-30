@@ -26,8 +26,6 @@ steps:
       - '8080'
       - '--set-env-vars'
       - 'MCP_AUTH_TOKEN=$_MCP_AUTH_TOKEN'
-      - '--labels'
-      - 'mcp-connector=true,mcp-name=dmv-production-database'
       
   # ─────────────────────────────────────────────────────────────────────────────
   # Part 2: Build and Deploy the Full-Stack Node.js Application

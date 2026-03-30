@@ -564,4 +564,22 @@ app.get('/api/test-tool', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`DMV Backend running on http://localhost:${PORT}`));
+// -----------------------------------------------------------------------
+// Static Frontend Serving (For Docker / Production)
+// -----------------------------------------------------------------------
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distPath = path.join(__dirname, 'dist');
+
+if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+    });
+}
+
+app.listen(PORT, () => console.log(`DMV Backend running on port ${PORT}`));

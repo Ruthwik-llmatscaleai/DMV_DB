@@ -103,5 +103,6 @@ async def proxy(request: Request):
 app = Starlette(routes=[Route("/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"])])
 
 if __name__ == "__main__":
-    print("Auth Gateway on 127.0.0.1:8001 → forwarding to {}".format(TARGET_URL))
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    gateway_port = int(os.environ.get("PORT", 8001))
+    print("Auth Gateway on 0.0.0.0:{} → forwarding to {}".format(gateway_port, TARGET_URL))
+    uvicorn.run(app, host="0.0.0.0", port=gateway_port)

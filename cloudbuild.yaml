@@ -1,0 +1,60 @@
+steps:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Part 1: Build and Deploy the Secure Python MCP Server
+  # ─────────────────────────────────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-mcp
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/dmv-mcp-server', './mcp-servers']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-mcp
+    args: ['push', 'gcr.io/$PROJECT_ID/dmv-mcp-server']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-mcp
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'dmv-mcp-server'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/dmv-mcp-server'
+      - '--region'
+      - 'us-central1'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--set-env-vars'
+      - 'MCP_AUTH_TOKEN=$_MCP_AUTH_TOKEN'
+      
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Part 2: Build and Deploy the Full-Stack Node.js Application
+  # ─────────────────────────────────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-app
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/dmv-atlas-app', '.']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-app
+    args: ['push', 'gcr.io/$PROJECT_ID/dmv-atlas-app']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-app
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'dmv-atlas-app'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/dmv-atlas-app'
+      - '--region'
+      - 'us-central1'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--set-env-vars'
+      - 'GROQ_API_KEY=$_GROQ_API_KEY,DEFAULT_MCP_URL=$_DEFAULT_MCP_URL'
+
+images:
+  - 'gcr.io/$PROJECT_ID/dmv-mcp-server'
+  - 'gcr.io/$PROJECT_ID/dmv-atlas-app'

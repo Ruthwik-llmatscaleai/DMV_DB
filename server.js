@@ -24,6 +24,48 @@ app.use(express.json());
 const activeConnectors = new Map();
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+// -----------------------------------------------------------------------
+// Auto-Initialization (Connect to Cloud Run MCP automatically)
+// -----------------------------------------------------------------------
+const DEFAULT_MCP_URL = process.env.DEFAULT_MCP_URL || 'https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/sse';
+const DEFAULT_CONNECTOR_ID = 'default-cloud-run-mcp';
+
+async function autoConnectTodefaultMcp() {
+    try {
+        console.log(`[System] Auto-connecting to default MCP server: ${DEFAULT_MCP_URL}`);
+        const transport = buildTransportFromUrl(DEFAULT_MCP_URL);
+        const client = new Client(
+            { name: 'DMV-UI-Client', version: '1.0.0' },
+            { capabilities: { tools: {} } }
+        );
+        
+        activeConnectors.set(DEFAULT_CONNECTOR_ID, { 
+            name: 'DMV Production Database', 
+            client, 
+            transport, 
+            status: 'connecting' 
+        });
+
+        const timer = setTimeout(() => {
+            if (activeConnectors.get(DEFAULT_CONNECTOR_ID)?.status === 'connecting')
+                console.error(`[System] Timeout connecting to default MCP`);
+        }, 15_000);
+
+        await client.connect(transport);
+        clearTimeout(timer);
+
+        activeConnectors.get(DEFAULT_CONNECTOR_ID).status = 'connected';
+        console.log(`[System] ✅ Successfully auto-connected to Production Database!`);
+    } catch (error) {
+        console.error(`[System] ❌ Failed to auto-connect to default MCP:`, error.message);
+        if (activeConnectors.has(DEFAULT_CONNECTOR_ID)) {
+             activeConnectors.get(DEFAULT_CONNECTOR_ID).status = 'error';
+        }
+    }
+}
+// Trigger the auto-connect in the background
+autoConnectTodefaultMcp();
+
 function buildTransportFromUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();
     if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {

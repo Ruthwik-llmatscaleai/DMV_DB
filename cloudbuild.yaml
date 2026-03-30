@@ -53,7 +53,7 @@ steps:
       - '--port'
       - '8080'
       - '--set-env-vars'
-      - 'GROQ_API_KEY=$_GROQ_API_KEY,DEFAULT_MCP_URL=$_DEFAULT_MCP_URL'
+      - 'GROQ_API_KEY=$_GROQ_API_KEY'
 
 images:
   - 'gcr.io/$PROJECT_ID/dmv-mcp-server'

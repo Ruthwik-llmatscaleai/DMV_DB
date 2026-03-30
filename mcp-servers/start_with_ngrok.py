@@ -5,7 +5,7 @@ import sys
 from pyngrok import ngrok
 
 # --- Configuration ---
-PORT = 8000
+PORT = 8002
 VENV_PATH = "/Users/rajasekharbandreddy/Downloads/bq_mcp_test/venv"
 PYTHON_EXEC = os.path.join(VENV_PATH, "bin", "python3")
 MCP_SCRIPT = "/Users/rajasekharbandreddy/Downloads/bq_mcp_test/bq_mcp_server.py"

@@ -14,6 +14,8 @@ echo "================================================="
 echo "🔒 STARTING SECURE DMV ATLAS MCP PIPELINE"
 echo "================================================="
 
+cd "$(dirname "$0")"
+
 # 1. Start the internal FastMCP server (Port 8000)
 echo "[1/3] Starting internal protocol server on port 8000..."
 $PYTHON_BIN bq_mcp_server.py > /dev/null 2>&1 &

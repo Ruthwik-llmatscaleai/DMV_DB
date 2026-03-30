@@ -77,8 +77,11 @@ async def proxy(request: Request):
     url = httpx.URL(path=request.url.path, query=request.url.query.encode("utf-8"))
     forwarded_headers = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in ("host", "authorization")
+        if k.lower() not in ("authorization",)
     }
+    forwarded_headers["x-forwarded-proto"] = request.headers.get("x-forwarded-proto", "https")
+    forwarded_headers["x-forwarded-host"] = request.headers.get("host", "")
+    forwarded_headers["x-forwarded-for"] = client_ip
     body = await request.body()
 
     req = client.build_request(request.method, url, headers=forwarded_headers, content=body)

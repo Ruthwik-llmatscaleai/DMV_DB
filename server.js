@@ -9,9 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 3001;
+console.log('🚀 DMV Backend STARTUP - v1.3 (Registry System Active)');
 
 app.use(cors({
     origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
@@ -69,8 +67,10 @@ async function connectToMcp(url, displayName) {
  * Reads mcp_registry.json and connects to all listed MCPs.
  */
 async function autoConnectFromRegistry() {
+    console.log('[System] Attempting to load MCP registry...');
     try {
         const registryPath = path.join(process.cwd(), 'mcp_registry.json');
+        console.log(`[System] Checking for registry at: ${registryPath}`);
         if (fs.existsSync(registryPath)) {
             const data = fs.readFileSync(registryPath, 'utf8');
             const connectors = JSON.parse(data);

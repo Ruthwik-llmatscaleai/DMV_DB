@@ -13,7 +13,10 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-console.log('🚀 DMV Backend STARTUP - v1.4 (Registry System Active)');
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+console.log('🚀 DMV Backend STARTUP - v1.5 (Registry System Active, Bugfix)');
 
 app.use(cors({
     origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',

@@ -104,42 +104,37 @@ function buildTransportFromUrl(rawUrl) {
     const parsed = new URL(formattedUrl);
     const isLegacySSE = parsed.pathname.endsWith('/sse');
     const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
-    const SECURE_TOKEN = 'Bearer zrok-secure-secret-token-123';
+const SECURE_TOKEN = 'Bearer zrok-secure-secret-token-123';
 
-    const headers = {
-        'ngrok-skip-browser-warning': 'true',
-        'User-Agent': 'DMV-DB-Connect-Client/1.0.0',
-    };
-    if (isSecureTunnel) {
-        headers['Authorization'] = SECURE_TOKEN;
+// -----------------------------------------------------------------------
+// Global Fetch Override — Enforce Authorization on all MCP-bound requests
+// -----------------------------------------------------------------------
+const originalFetch = global.fetch;
+global.fetch = async (input, init) => {
+    const urlStr = typeof input === 'string' ? input : input.url;
+    const isMcpTarget = urlStr?.includes('.run.app') || urlStr?.includes('.zrok.io');
+
+    if (isMcpTarget) {
+        init = init || {};
+        const headers = {
+            ...(init.headers || {}),
+            'Authorization': SECURE_TOKEN,
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'DMV-DB-Connect-Client/1.0.0'
+        };
+        init.headers = headers;
+        console.log(`[GlobalFetch] Injecting Auth -> ${urlStr}`);
     }
-
-    // Custom fetch interceptor — forces Authorization onto every request the SDK makes,
-    // including the POST /messages calls where the SDK otherwise overwrites headers.
-    const customFetch = isSecureTunnel
-        ? (input, init) => {
-            init = init || {};
-            const finalHeaders = { ...(init.headers || {}), 'Authorization': SECURE_TOKEN };
-            init.headers = finalHeaders;
-            console.log(`[Fetch Debug] ${input} - Auth: ${finalHeaders.Authorization ? 'Present' : 'MISSING'}`);
-            return fetch(input, init);
-        }
-        : undefined;
+    return originalFetch(input, init);
+};
 
     console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isSecureTunnel ? ' [secured]' : ''}`);
 
     if (isLegacySSE) {
-        return new SSEClientTransport(parsed, {
-            eventSourceInit: { headers },
-            requestInit: { headers },
-            ...(customFetch ? { fetch: customFetch } : {}),
-        });
+        return new SSEClientTransport(parsed);
     }
 
-    return new StreamableHTTPClientTransport(parsed, {
-        requestInit: { headers },
-        ...(customFetch ? { fetch: customFetch } : {}),
-    });
+    return new StreamableHTTPClientTransport(parsed);
 }
 
 // -----------------------------------------------------------------------

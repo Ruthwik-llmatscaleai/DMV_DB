@@ -103,7 +103,9 @@ def list_customers(limit: int = 50) -> List[Dict[str, Any]]:
 
 # ── Entry Point ──────────────────────────────────────────────────────────
 
+# Usage: uvicorn bq_mcp_server:mcp.app --host 0.0.0.0 --port $PORT
 if (__name__ == "__main__"):
-    port = int(os.environ.get("PORT", 8000))
-    print("🚀 Starting MCP Server v2.1 (Direct Port 0.0.0.0)")
-    mcp.run(transport="http", host="0.0.0.0", port=port)
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    print(f"🚀 Starting MCP Server v2.2 on 0.0.0.0:{port}")
+    uvicorn.run(mcp.app, host="0.0.0.0", port=port)

@@ -55,6 +55,7 @@ client = httpx.AsyncClient(base_url=TARGET_URL, timeout=None)
 async def proxy(request: Request):
     # 1. Rate limiting
     client_ip = request.client.host if request.client else "unknown"
+    print(f"[Auth] {request.method} {request.url.path} from {client_ip}")
     if _is_rate_limited(client_ip):
         return JSONResponse(
             {"error": "Too Many Requests", "message": "Rate limit exceeded"},
@@ -77,15 +78,19 @@ async def proxy(request: Request):
     url = httpx.URL(path=request.url.path, query=request.url.query.encode("utf-8"))
     forwarded_headers = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in ("authorization",)
+        if k.lower() not in ("authorization", "host", "connection")
     }
     forwarded_headers["x-forwarded-proto"] = request.headers.get("x-forwarded-proto", "https")
     forwarded_headers["x-forwarded-host"] = request.headers.get("host", "")
     forwarded_headers["x-forwarded-for"] = client_ip
     body = await request.body()
 
-    req = client.build_request(request.method, url, headers=forwarded_headers, content=body)
-    resp = await client.send(req, stream=True)
+    try:
+        req = client.build_request(request.method, url, headers=forwarded_headers, content=body)
+        resp = await client.send(req, stream=True)
+    except Exception as e:
+        print(f"[Auth] ❌ Proxy Error: {e}")
+        return JSONResponse({"error": "Bad Gateway", "message": str(e)}, status_code=502)
 
     return StreamingResponse(
         resp.aiter_raw(),

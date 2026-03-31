@@ -24,8 +24,9 @@ RUN npm ci --omit=dev
 # Copy the built frontend
 COPY --from=builder /app/dist ./dist
 
-# Copy the backend files (server.js, and api folder if relevant)
+# Copy the backend files (server.js, and JSON registry)
 COPY server.js .
+COPY mcp_registry.json .
 COPY api ./api
 
 ENV PORT=8080

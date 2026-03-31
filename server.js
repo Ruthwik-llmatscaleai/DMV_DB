@@ -119,11 +119,9 @@ function buildTransportFromUrl(rawUrl) {
     const customFetch = isSecureTunnel
         ? (input, init) => {
             init = init || {};
-            if (typeof init.headers === 'object' && typeof init.headers.set === 'function') {
-                init.headers.set('Authorization', SECURE_TOKEN);
-            } else {
-                init.headers = { ...(init.headers || {}), 'Authorization': SECURE_TOKEN };
-            }
+            const finalHeaders = { ...(init.headers || {}), 'Authorization': SECURE_TOKEN };
+            init.headers = finalHeaders;
+            console.log(`[Fetch Debug] ${input} - Auth: ${finalHeaders.Authorization ? 'Present' : 'MISSING'}`);
             return fetch(input, init);
         }
         : undefined;

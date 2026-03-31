@@ -62,17 +62,23 @@ async def proxy(request: Request):
             status_code=429,
         )
 
-    # 2. Authentication
+    # 2. Authentication (Header or Query Param)
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    query_token = request.query_params.get("token", "")
+    
+    provided_token = ""
+    if auth_header.startswith("Bearer "):
+        provided_token = auth_header[7:]
+    elif query_token:
+        provided_token = query_token
 
-    provided_token = auth_header[7:]  # strip "Bearer "
     if not provided_token:
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        print(f"[Auth] ❌ Missing token")
+        return JSONResponse({"error": "Unauthorized - Missing token"}, status_code=401)
 
     if not hmac.compare_digest(provided_token, VALID_TOKEN):
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
+        print(f"[Auth] ❌ Invalid token provided")
+        return JSONResponse({"error": "Forbidden - Invalid token"}, status_code=403)
 
     # 3. Forward to MCP server
     url = httpx.URL(path=request.url.path, query=request.url.query.encode("utf-8"))

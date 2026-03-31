@@ -1,7 +1,7 @@
 [
   {
     "name": "DMV Production Database",
-    "url": "https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/mcp",
+    "url": "https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/mcp?token=zrok-secure-secret-token-123",
     "type": "mcp"
   }
 ]

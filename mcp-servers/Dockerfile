@@ -16,10 +16,8 @@ COPY . .
 # Make the entrypoint executable
 RUN chmod +x entrypoint.sh
 
-# Cloud Run injects $PORT; the Auth Gateway will bind to it.
-# Default to 8080 for local Docker testing.
+# Cloud Run injects $PORT; the server will bind to it directly.
 ENV PORT=8080
-ENV MCP_PORT=8000
 
 EXPOSE ${PORT}
 

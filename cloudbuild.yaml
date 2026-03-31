@@ -24,8 +24,6 @@ steps:
       - '--allow-unauthenticated'
       - '--port'
       - '8080'
-      - '--set-env-vars'
-      - 'MCP_AUTH_TOKEN=$_MCP_AUTH_TOKEN'
       
   # ─────────────────────────────────────────────────────────────────────────────
   # Part 2: Build and Deploy the Full-Stack Node.js Application
@@ -53,7 +51,7 @@ steps:
       - '--port'
       - '8080'
       - '--set-env-vars'
-      - 'GROQ_API_KEY=$_GROQ_API_KEY'
+      - 'ALLOWED_ORIGIN=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,ALLOWED_ORIGIN_PROD=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,GROQ_API_KEY=$_GROQ_API_KEY,GROQ_MODEL=llama-3.3-70b-versatile'
 
 images:
   - 'gcr.io/$PROJECT_ID/dmv-mcp-server'

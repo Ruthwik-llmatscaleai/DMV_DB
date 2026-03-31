@@ -104,29 +104,6 @@ function buildTransportFromUrl(rawUrl) {
     const parsed = new URL(formattedUrl);
     const isLegacySSE = parsed.pathname.endsWith('/sse');
     const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
-const SECURE_TOKEN = 'Bearer zrok-secure-secret-token-123';
-
-// -----------------------------------------------------------------------
-// Global Fetch Override — Enforce Authorization on all MCP-bound requests
-// -----------------------------------------------------------------------
-const originalFetch = global.fetch;
-global.fetch = async (input, init) => {
-    const urlStr = typeof input === 'string' ? input : input.url;
-    const isMcpTarget = urlStr?.includes('.run.app') || urlStr?.includes('.zrok.io');
-
-    if (isMcpTarget) {
-        init = init || {};
-        const headers = {
-            ...(init.headers || {}),
-            'Authorization': SECURE_TOKEN,
-            'ngrok-skip-browser-warning': 'true',
-            'User-Agent': 'DMV-DB-Connect-Client/1.0.0'
-        };
-        init.headers = headers;
-        console.log(`[GlobalFetch] Injecting Auth -> ${urlStr}`);
-    }
-    return originalFetch(input, init);
-};
 
     console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isSecureTunnel ? ' [secured]' : ''}`);
 

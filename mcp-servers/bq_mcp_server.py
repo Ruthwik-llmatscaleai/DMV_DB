@@ -103,10 +103,6 @@ def list_customers(limit: int = 50) -> List[Dict[str, Any]]:
 
 # ── Entry Point ──────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    port = int(os.environ.get("MCP_PORT", 8000))
-    mcp.run(
-        transport="http",
-        host="127.0.0.1",
-        port=port,
-    )
+if (__name__ == "__main__"):
+    port = int(os.environ.get("PORT", 8000))
+    mcp.run(transport="http", host="0.0.0.0", port=port)

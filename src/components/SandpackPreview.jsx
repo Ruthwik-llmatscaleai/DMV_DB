@@ -331,6 +331,14 @@ export default function SandpackPreview({ files, template = 'react' }) {
                         template={template === 'vanilla' ? 'vanilla' : 'react'}
                         files={sandpackFiles}
                         theme="dark"
+                        customSetup={{
+                            dependencies: {
+                                'react-router-dom': '^7.0.0',
+                                'lucide-react': '^0.400.0',
+                                'framer-motion': '^11.0.0',
+                                'react-icons': '^5.0.0',
+                            },
+                        }}
                         options={{
                             externalResources: [
                                 "https://cdn.tailwindcss.com",

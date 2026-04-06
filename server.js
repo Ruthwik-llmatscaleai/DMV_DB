@@ -324,12 +324,12 @@ Tailwind CSS and Google Fonts are pre-loaded in the preview environment. Use the
 - NEVER use @tailwind directives in CSS files. They don't work in this environment.
 - Google Fonts (Inter, Poppins) and Tailwind CSS are already pre-loaded in the environment. Do NOT add import statements, link tags, script tags, @import, or @tailwind directives for them. Just use the Tailwind classes and font-family names directly in your JSX.
 - The styles.css file should ONLY contain custom CSS rules if needed. Keep it minimal or empty.
-## CRITICAL RULES — VIOLATIONS WILL BREAK THE PREVIEW
-- **FORBIDDEN IMPORTS**: Do NOT import react-router-dom, react-router, lucide-react, react-icons, framer-motion, axios, or ANY npm package other than 'react' and 'react-dom'. These packages are NOT installed and will cause a fatal error.
-- **NO ROUTING**: Do NOT use BrowserRouter, Routes, Route, Link, or any routing. Build a SINGLE-PAGE scrollable site with anchor links (#about, #projects, #contact) for navigation.
-- **NO ICON LIBRARIES**: Use inline SVG or emoji for icons. Example: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="..."/></svg>
-- **CSS ANIMATIONS ONLY**: Use Tailwind classes (transition-all, duration-300, hover:-translate-y-1) or CSS keyframes. No animation libraries.
-- Put all components in App.jsx, or create separate files (Navbar.jsx, Footer.jsx) with relative imports (import Navbar from './Navbar').`;
+## Environment Rules
+- Available packages: react, react-dom, react-router-dom. You may use BrowserRouter, Routes, Route, Link, NavLink for multi-page sites.
+- For icons, use inline SVGs. Do NOT import icon libraries (lucide-react, react-icons, etc.).
+- For animations, use Tailwind classes (transition-all, duration-300, hover:-translate-y-1) or CSS keyframes. Do NOT import framer-motion.
+- Create separate files for components and pages (e.g. components/Navbar.jsx, pages/Home.jsx). Use relative imports (import Navbar from './components/Navbar').
+- Use HashRouter instead of BrowserRouter for better preview compatibility.`;
 
 // -----------------------------------------------------------------------
 // Intent Detection

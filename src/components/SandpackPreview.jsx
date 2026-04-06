@@ -36,41 +36,36 @@ export default function SandpackPreview({ files, template = 'react' }) {
 
     if (!files || Object.keys(files).length === 0) return null;
 
-    // Sanitize generated code — strip things that crash Sandpack's bundler
-    // Sandpack only has react + react-dom. Other packages cause "Could not find dependency".
-    const ALLOWED_PACKAGES = new Set(['react', 'react-dom', 'react/jsx-runtime']);
+    // Light CSS sanitization only — JS/JSX is left untouched
     const sanitizeCode = (code, filename) => {
         let cleaned = code;
         if (filename.endsWith('.css')) {
             cleaned = cleaned.replace(/^@import\s+url\([^)]+\);?\s*$/gm, '');
             cleaned = cleaned.replace(/^@tailwind\s+\w+;?\s*$/gm, '');
         } else {
-            // Remove URL imports
             cleaned = cleaned.replace(/^import\s+['"]https?:\/\/[^'"]+['"];?\s*$/gm, '');
-            // Strip npm package imports that aren't available in Sandpack
-            // import X from 'pkg' or import { X } from 'pkg'
-            cleaned = cleaned.replace(/^(import\s+.*?\s+from\s+['"])([^./][^'"]*?)(['"].*$)/gm, (match, pre, pkg, post) => {
-                const base = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
-                return ALLOWED_PACKAGES.has(base) ? match : '';
-            });
-            // import 'pkg' (side-effect only)
-            cleaned = cleaned.replace(/^import\s+['"]([^./][^'"]*)['"]\s*;?\s*$/gm, (match, pkg) => {
-                const base = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
-                return ALLOWED_PACKAGES.has(base) ? match : '';
-            });
-            // Remove JSX that uses Router/Routes/Route components since we stripped the import
-            cleaned = cleaned.replace(/<BrowserRouter[\s>][\s\S]*?<\/BrowserRouter>/g, (routerBlock) => {
-                // Extract the inner content of Route elements' element prop
-                const routeMatch = routerBlock.match(/element=\{<(\w+)\s*\/>\}/);
-                return routeMatch ? `<${routeMatch[1]} />` : '<div>App Content</div>';
-            });
-            cleaned = cleaned.replace(/<Router[\s>][\s\S]*?<\/Router>/g, (routerBlock) => {
-                const routeMatch = routerBlock.match(/element=\{<(\w+)\s*\/>\}/);
-                return routeMatch ? `<${routeMatch[1]} />` : '<div>App Content</div>';
-            });
         }
         return cleaned;
     };
+
+    // Auto-detect npm packages used in the generated code
+    const KNOWN_PACKAGES = {
+        'react-router-dom': 'latest',
+        'react-router': 'latest',
+        'lucide-react': 'latest',
+        'framer-motion': 'latest',
+        'react-icons': 'latest',
+        'axios': 'latest',
+        '@headlessui/react': 'latest',
+        'clsx': 'latest',
+    };
+    const allCode = Object.values(files).join('\n');
+    const detectedDeps = {};
+    for (const [pkg, version] of Object.entries(KNOWN_PACKAGES)) {
+        if (allCode.includes(pkg)) {
+            detectedDeps[pkg] = version;
+        }
+    }
 
     // Prepare files for Sandpack format
     // Sandpack's React template has a default /App.js that shows "Hello World".
@@ -383,6 +378,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
                         template={template === 'vanilla' ? 'vanilla' : 'react'}
                         files={sandpackFiles}
                         theme="dark"
+                        dependencies={Object.keys(detectedDeps).length > 0 ? detectedDeps : undefined}
                         options={{
                             externalResources: [
                                 "https://cdn.tailwindcss.com",

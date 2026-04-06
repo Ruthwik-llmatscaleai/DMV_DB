@@ -13,5 +13,10 @@
     "name": "Salesforce Local (zrok)",
     "url": "https://7yzqg21ga6f7.share.zrok.io/mcp",
     "type": "mcp"
+  },
+  {
+    "name": "GitHub (Requires local zrok bridge)",
+    "url": "https://github-mcp.share.zrok.io/mcp",
+    "type": "mcp"
   }
 ]

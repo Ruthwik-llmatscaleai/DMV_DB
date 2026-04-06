@@ -36,6 +36,19 @@ export default function SandpackPreview({ files, template = 'react' }) {
 
     if (!files || Object.keys(files).length === 0) return null;
 
+    // Sanitize generated code — strip imports that crash Sandpack's bundler
+    const sanitizeCode = (code, filename) => {
+        let cleaned = code;
+        // Remove URL imports in JS/JSX: import 'https://...' or import "https://..."
+        cleaned = cleaned.replace(/^import\s+['"]https?:\/\/[^'"]+['"];?\s*$/gm, '');
+        // Remove @import url(...) in CSS
+        if (filename.endsWith('.css')) {
+            cleaned = cleaned.replace(/^@import\s+url\([^)]+\);?\s*$/gm, '');
+            cleaned = cleaned.replace(/^@tailwind\s+\w+;?\s*$/gm, '');
+        }
+        return cleaned;
+    };
+
     // Prepare files for Sandpack format
     // Sandpack's React template has a default /App.js that shows "Hello World".
     // We must map /App.jsx → /App.js to override it, otherwise both exist
@@ -45,7 +58,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
         let key = name.startsWith('/') ? name : `/${name}`;
         // Map .jsx → .js so we override Sandpack's template defaults
         if (key === '/App.jsx') key = '/App.js';
-        sandpackFiles[key] = { code };
+        sandpackFiles[key] = { code: sanitizeCode(code, key) };
     }
 
     // Ensure App entry exists for React template

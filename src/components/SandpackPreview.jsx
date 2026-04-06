@@ -36,30 +36,15 @@ export default function SandpackPreview({ files, template = 'react' }) {
 
     if (!files || Object.keys(files).length === 0) return null;
 
-    // Sanitize generated code — strip imports that crash Sandpack's bundler
-    // Sandpack's React template only has react + react-dom. Any other npm
-    // package import will crash the preview. We strip them here — they'll
-    // work fine when deployed since the scaffold adds proper dependencies.
-    const ALLOWED_PACKAGES = new Set(['react', 'react-dom', 'react/jsx-runtime']);
+    // Light sanitization — only strip things that definitely crash Sandpack
     const sanitizeCode = (code, filename) => {
         let cleaned = code;
         if (filename.endsWith('.css')) {
-            // Remove @import url(...) and @tailwind directives in CSS
             cleaned = cleaned.replace(/^@import\s+url\([^)]+\);?\s*$/gm, '');
             cleaned = cleaned.replace(/^@tailwind\s+\w+;?\s*$/gm, '');
         } else {
-            // Remove URL imports: import 'https://...'
+            // Remove URL imports (import 'https://...') — Sandpack can't handle these
             cleaned = cleaned.replace(/^import\s+['"]https?:\/\/[^'"]+['"];?\s*$/gm, '');
-            // Remove imports of npm packages not available in Sandpack
-            // Matches: import X from 'pkg', import { X } from 'pkg', import 'pkg'
-            cleaned = cleaned.replace(/^import\s+.*?\s+from\s+['"]([^./][^'"]*)['"]\s*;?\s*$/gm, (match, pkg) => {
-                const basePkg = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
-                return ALLOWED_PACKAGES.has(basePkg) ? match : `// [stripped for preview] ${match.trim()}`;
-            });
-            cleaned = cleaned.replace(/^import\s+['"]([^./][^'"]*)['"]\s*;?\s*$/gm, (match, pkg) => {
-                const basePkg = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
-                return ALLOWED_PACKAGES.has(basePkg) ? match : `// [stripped for preview] ${match.trim()}`;
-            });
         }
         return cleaned;
     };

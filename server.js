@@ -324,11 +324,11 @@ Tailwind CSS and Google Fonts are pre-loaded in the preview environment. Use the
 - NEVER use @tailwind directives in CSS files. They don't work in this environment.
 - Google Fonts (Inter, Poppins) and Tailwind CSS are already pre-loaded in the environment. Do NOT add import statements, link tags, script tags, @import, or @tailwind directives for them. Just use the Tailwind classes and font-family names directly in your JSX.
 - The styles.css file should ONLY contain custom CSS rules if needed. Keep it minimal or empty.
-- The ONLY npm packages available are: react and react-dom. Do NOT import react-router-dom, lucide-react, framer-motion, axios, or any other package. They will cause errors.
-- For icons, use inline SVGs or emoji. Do NOT use icon libraries.
-- Build single-page scrollable sites with anchor sections (e.g. #about, #projects, #contact). Do NOT use react-router or multi-page routing.
+- Build single-page scrollable sites with anchor sections (#about, #projects, #contact). Do NOT use react-router or multi-page routing — it does not work in the preview.
+- For icons, use inline SVGs or emoji. Do NOT use icon libraries like lucide-react or react-icons.
+- For animations, use CSS transitions and Tailwind classes (transition-all, duration-300, hover:-translate-y-1). Do NOT use framer-motion.
 - If you use multiple components, create separate files like Navbar.jsx, Footer.jsx. Always use relative imports (e.g. import Navbar from './Navbar').
-- For animations, use CSS transitions and keyframes. Do NOT use framer-motion or animation libraries.`;
+- The only packages available are react and react-dom. Do not import anything else.`;
 
 // -----------------------------------------------------------------------
 // Intent Detection

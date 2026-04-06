@@ -51,7 +51,7 @@ steps:
       - '--port'
       - '8080'
       - '--set-env-vars'
-      - 'ALLOWED_ORIGIN=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,ALLOWED_ORIGIN_PROD=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,GROQ_API_KEY=$_GROQ_API_KEY,GROQ_MODEL=llama-3.3-70b-versatile'
+      - 'ALLOWED_ORIGIN=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,ALLOWED_ORIGIN_PROD=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,GROQ_API_KEY=$_GROQ_API_KEY,GROQ_MODEL=llama-3.3-70b-versatile,GEMINI_API_KEY=$_GEMINI_API_KEY'
 
 images:
   - 'gcr.io/$PROJECT_ID/dmv-mcp-server'

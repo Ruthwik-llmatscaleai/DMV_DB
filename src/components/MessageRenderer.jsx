@@ -1,16 +1,61 @@
 import React from 'react';
+import SandpackPreview from './SandpackPreview';
+
+// ── File block parser ────────────────────────────────────────────────────────
+// Extracts <file name="...">code</file> blocks from LLM output
+const FILE_BLOCK_REGEX = /<file\s+name="([^"]+)">\s*([\s\S]*?)\s*<\/file>/g;
+const TEMPLATE_REGEX = /<template>(react|vanilla)<\/template>/i;
+
+function parseCodeBlocks(content) {
+    const files = {};
+    let match;
+    const regex = new RegExp(FILE_BLOCK_REGEX.source, 'g');
+
+    while ((match = regex.exec(content)) !== null) {
+        const filename = match[1];
+        const code = match[2].trim();
+        const key = filename.startsWith('/') ? filename : `/${filename}`;
+        files[key] = code;
+    }
+
+    // Detect template type
+    const templateMatch = TEMPLATE_REGEX.exec(content);
+    const template = templateMatch ? templateMatch[1] : 'react';
+
+    // Strip file blocks and template tag from remaining content
+    const remainingText = content
+        .replace(new RegExp(FILE_BLOCK_REGEX.source, 'g'), '')
+        .replace(TEMPLATE_REGEX, '')
+        .trim();
+
+    return {
+        files: Object.keys(files).length > 0 ? files : null,
+        template,
+        remainingText,
+    };
+}
 
 /**
  * MessageRenderer
  * Renders assistant/user messages as clean, conversational prose.
  * Supports: bold (**text**), bullet lists (- item), numbered lists (1. item),
- * paragraph breaks. Strips/hides any accidental code blocks.
+ * paragraph breaks, tables, and embedded Sandpack code previews.
  */
-export default function MessageRenderer({ content, role }) {
+export default function MessageRenderer({ content, role, onCodeParsed }) {
     if (!content) return null;
 
-    // Strip any inline backticks that snuck through, but keep multiline code blocks
-    const sanitised = content
+    // Step 1: Parse code blocks BEFORE any sanitization
+    const { files, template, remainingText } = parseCodeBlocks(content);
+
+    // Notify parent of parsed code (for codeSnapshot tracking)
+    React.useEffect(() => {
+        if (files && onCodeParsed) {
+            onCodeParsed(files, template);
+        }
+    }, [files, onCodeParsed, template]);
+
+    // Step 2: Sanitize ONLY the remaining text (not the code)
+    const sanitised = remainingText
         .replace(/`([^`\n]+)`/g, '$1')
         .trim();
 
@@ -159,6 +204,9 @@ export default function MessageRenderer({ content, role }) {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
             {elements}
+            {files && (
+                <SandpackPreview files={files} template={template} />
+            )}
         </div>
     );
 }

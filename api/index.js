@@ -191,7 +191,7 @@ app.delete('/api/connectors/:id', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------
-// System Prompt
+// System Prompts
 // -----------------------------------------------------------------------
 const SYSTEM_PROMPT = `You are Atlas, an intelligent data assistant for the California DMV.
 You have direct access to live database tools — use them proactively.
@@ -224,6 +224,142 @@ Chain multiple tool calls as needed. There is no limit.
 - Never mention tool names, dataset names, BigQuery, MCP, or any infrastructure
 - If nothing is found: "I checked and couldn't find anything matching that."
 - Keep a helpful, professional tone`;
+
+const CODE_GEN_SYSTEM_PROMPT = `You are Atlas, an expert web developer assistant.
+When asked to build, create, or generate a website, app, landing page, dashboard, or UI component:
+
+1. Output complete, working code using XML file tags:
+   <file name="App.jsx">
+   // complete code here
+   </file>
+   <file name="styles.css">
+   /* complete styles here */
+   </file>
+
+2. Always include App.jsx as the main entry point for React projects.
+3. Use modern React with hooks and functional components.
+4. Make the design visually impressive — use gradients, animations, modern typography (e.g. Inter, Poppins from Google Fonts via CDN).
+5. Keep each file under 200 lines to stay within output limits.
+6. After the code blocks, add a brief 2-3 sentence description of what you built and what the user can modify.
+7. For complex requests, build the core layout first and tell the user they can ask to modify specific sections.
+8. When modifying existing code, output ALL files again with changes applied (not just the diff).
+9. For vanilla HTML/CSS requests, use <template>vanilla</template> before the file blocks.
+10. Do NOT use markdown code fences. ONLY use the <file name="..."> XML tags.`;
+
+// -----------------------------------------------------------------------
+// Intent Detection — routes user message to the right provider
+// -----------------------------------------------------------------------
+const CODE_GEN_KEYWORDS = [
+    'build', 'create', 'generate', 'make', 'design', 'code', 'develop',
+    'website', 'webpage', 'landing page', 'app', 'application', 'dashboard',
+    'ui', 'component', 'page', 'layout', 'form', 'portfolio', 'blog',
+    'e-commerce', 'ecommerce', 'store', 'shop', 'html', 'css', 'react',
+    'frontend', 'web app', 'homepage', 'interface', 'template'
+];
+
+function isCodeGenerationRequest(messages) {
+    // Check the last user message for code-generation intent
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUserMsg) return false;
+
+    const text = (lastUserMsg.content || '').toLowerCase();
+    const matchCount = CODE_GEN_KEYWORDS.filter(kw => text.includes(kw)).length;
+
+    // Need at least 2 keyword matches to trigger code generation
+    // OR if there's a clear "build/create + website/app" pattern
+    if (matchCount >= 2) return true;
+
+    // Check for explicit "make it"/"change the" patterns (iterative editing)
+    if (/\b(make|change|update|modify|fix|add|remove|replace)\b.*\b(header|footer|nav|button|color|font|section|background|title|text|image|logo)\b/i.test(text)) {
+        return true;
+    }
+
+    return false;
+}
+
+// -----------------------------------------------------------------------
+// Gemini API Caller (for code generation)
+// -----------------------------------------------------------------------
+async function callGemini(messages, maxTokens = 16384) {
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
+        console.warn('[Gemini] No API key configured, falling back to Groq');
+        return null;
+    }
+
+    try {
+        const contents = messages
+            .filter(m => m.role !== 'system')
+            .map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content || '' }]
+            }));
+
+        // Inject system instruction
+        const systemInstruction = messages.find(m => m.role === 'system');
+
+        const body = {
+            contents,
+            generationConfig: {
+                maxOutputTokens: maxTokens,
+                temperature: 0.4,
+            },
+        };
+
+        if (systemInstruction) {
+            body.systemInstruction = { parts: [{ text: systemInstruction.content }] };
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${GEMINI_API_KEY}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }
+        );
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            console.error(`[Gemini] HTTP ${response.status}:`, JSON.stringify(errData));
+            return null;
+        }
+
+        const data = await response.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) {
+            console.error('[Gemini] No text in response:', JSON.stringify(data));
+            return null;
+        }
+
+        return { role: 'assistant', content: text };
+    } catch (error) {
+        console.error('[Gemini] Call failed:', error.message);
+        return null;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Context compression for code-editing follow-ups
+// -----------------------------------------------------------------------
+function compressCodeContext(messages, codeSnapshot) {
+    if (!codeSnapshot || Object.keys(codeSnapshot).length === 0) return messages;
+
+    // Build a condensed context with the latest code state
+    const fileEntries = Object.entries(codeSnapshot)
+        .filter(([key]) => !key.startsWith('_')) // skip metadata fields
+        .map(([name, code]) => `<file name="${name.replace(/^\//, '')}">${code}</file>`)
+        .join('\n\n');
+
+    const codeContext = {
+        role: 'user',
+        content: `[CONTEXT] Here is the current state of the project I'm working on:\n\n${fileEntries}\n\nPlease use these files as the base for any modifications I request.`
+    };
+
+    // Keep only last 4 messages + the code context
+    const recentMessages = messages.slice(-4);
+    return [codeContext, ...recentMessages];
+}
 
 // -----------------------------------------------------------------------
 // Helper — build tool registry from all connected connectors
@@ -368,7 +504,7 @@ async function executeToolCalls(toolCalls, toolToConnector, messagesToLlm) {
 // POST /api/chat
 // -----------------------------------------------------------------------
 app.post('/api/chat', async (req, res) => {
-    const { messages } = req.body;
+    const { messages, codeSnapshot } = req.body;
     const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY;
 
     if (!GROQ_API_KEY || GROQ_API_KEY === 'your_grok_api_key_here') {
@@ -376,6 +512,77 @@ app.post('/api/chat', async (req, res) => {
     }
 
     try {
+        // Determine if this is a code generation request
+        const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
+
+        if (isCodeGen) {
+            // ═══════════════════════════════════════════════════
+            // CODE GENERATION PATH — uses Gemini (primary) or Groq (fallback)
+            // ═══════════════════════════════════════════════════
+            console.log('[Chat] 🎨 Code generation request detected');
+
+            // Build messages with code-gen system prompt
+            let codeMessages = messages.map(m => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            }));
+
+            // Compress context if we have a code snapshot (iterative editing)
+            if (codeSnapshot && Object.keys(codeSnapshot).filter(k => !k.startsWith('_')).length > 0) {
+                console.log('[Chat] 📦 Compressing context with code snapshot');
+                codeMessages = compressCodeContext(codeMessages, codeSnapshot);
+            }
+
+            const geminiMessages = [
+                { role: 'system', content: CODE_GEN_SYSTEM_PROMPT },
+                ...codeMessages,
+            ];
+
+            // Try Gemini first
+            let msg = await callGemini(geminiMessages, 16384);
+
+            if (!msg) {
+                // Fallback to Groq for code generation
+                console.log('[Chat] Gemini unavailable, falling back to Groq for code generation');
+                const groqCodeMessages = geminiMessages.map(m => ({ ...m, content: m.content ?? '' }));
+                const groqBody = {
+                    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+                    messages: groqCodeMessages,
+                    temperature: 0.4,
+                    max_tokens: 16384,
+                };
+
+                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${GROQ_API_KEY}`,
+                    },
+                    body: JSON.stringify(groqBody),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.choices?.length) {
+                        msg = data.choices[0].message;
+                    }
+                }
+            }
+
+            if (!msg) {
+                return res.json({
+                    role: 'assistant',
+                    content: "I'm having trouble generating code right now. Please try again in a moment.",
+                });
+            }
+
+            // Do NOT strip backticks from code generation responses
+            return res.json({ role: 'assistant', content: msg.content });
+        }
+
+        // ═══════════════════════════════════════════════════
+        // DATA QUERY PATH — uses Groq with MCP tool loop (existing behavior)
+        // ═══════════════════════════════════════════════════
         const { availableTools, toolToConnector } = await buildToolRegistry();
 
         const messagesToLlm = [
@@ -406,11 +613,8 @@ app.post('/api/chat', async (req, res) => {
             }
 
             let bodyStr = JSON.stringify(body);
-            // Foolproof regex to strip JSON embedded in tool names before it reaches Groq
-            // Matches: "name":"list_tables {"dataset_id"...}"
             bodyStr = bodyStr.replace(/"name":"([a-zA-Z0-9_-]+)\s*\{[^}]+\}"/g, '"name":"$1"');
 
-            // Retry loop for rate limits (429)
             const MAX_RETRIES = 3;
             let response, attempt;
             for (attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -424,8 +628,7 @@ app.post('/api/chat', async (req, res) => {
                 });
 
                 if (response.status === 429 && attempt < MAX_RETRIES) {
-                    // Parse wait time from response or use exponential backoff
-                    let waitSec = 2 * (attempt + 1); // default: 2s, 4s, 6s
+                    let waitSec = 2 * (attempt + 1);
                     try {
                         const retryAfter = response.headers.get('retry-after');
                         if (retryAfter) waitSec = Math.ceil(parseFloat(retryAfter));
@@ -439,7 +642,7 @@ app.post('/api/chat', async (req, res) => {
                     await new Promise(r => setTimeout(r, waitSec * 1000));
                     continue;
                 }
-                break; // success or non-429 error
+                break;
             }
 
             if (!response.ok) {
@@ -474,7 +677,6 @@ app.post('/api/chat', async (req, res) => {
         while (msg.tool_calls?.length > 0 && round < MAX_TOOL_ROUNDS) {
             round++;
 
-            // Sanitize malformed tool names before they enter the history
             for (const tc of msg.tool_calls) {
                 const braceIdx = tc.function.name.indexOf('{');
                 if (braceIdx !== -1) {
@@ -498,7 +700,6 @@ app.post('/api/chat', async (req, res) => {
             msg = await callGroq(!isLastAllowedRound);
 
             if (!msg) {
-                // Retry WITHOUT tools — force Llama to summarize what it already has
                 console.warn(`[Chat] callGroq failed after tool round ${round}, retrying without tools…`);
                 msg = await callGroq(false);
             }
@@ -514,9 +715,9 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        if (typeof msg.content === 'string') {
-            msg.content = msg.content
-                .replace(/`([^`]+)`/g, '$1');
+        // Only strip backticks for data queries (NOT code generation)
+        if (typeof msg.content === 'string' && !msg.content.includes('<file ')) {
+            msg.content = msg.content.replace(/`([^`]+)`/g, '$1');
         }
 
         res.json({ role: 'assistant', content: msg.content });

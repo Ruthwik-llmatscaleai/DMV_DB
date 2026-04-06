@@ -247,10 +247,16 @@ export default function Chat() {
                 content: m.content,
             }));
 
+            // Include codeSnapshot for context compression on code-editing follow-ups
+            const requestBody = { messages: contextToSend };
+            if (activeThread.codeSnapshot && Object.keys(activeThread.codeSnapshot).length > 0) {
+                requestBody.codeSnapshot = activeThread.codeSnapshot;
+            }
+
             const response = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: contextToSend }),
+                body: JSON.stringify(requestBody),
             });
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -308,6 +314,16 @@ export default function Chat() {
     const handleQuickPrompt = (text) => {
         sendMessage({ text });
     };
+
+    // Store parsed code files in thread state for context preservation
+    const handleCodeParsed = useCallback((files, template) => {
+        if (!files) return;
+        setThreads(prev => prev.map(t =>
+            t.id === activeThreadId
+                ? { ...t, codeSnapshot: { ...files, _template: template, _updatedAt: Date.now() } }
+                : t
+        ));
+    }, [activeThreadId]);
 
     const handleNewChat = () => {
         const newThread = {
@@ -524,8 +540,9 @@ export default function Chat() {
                                     )}
 
                                     <MessageRenderer
-                                        content={msg.displayContent || msg.content}
+                                        content={msg.role === 'assistant' ? msg.content : (msg.displayContent || msg.content)}
                                         role={msg.role}
+                                        onCodeParsed={msg.role === 'assistant' ? handleCodeParsed : undefined}
                                     />
 
                                     {/* File chips */}

@@ -61,6 +61,27 @@ export default function SandpackPreview({ files, template = 'react' }) {
         sandpackFiles[key] = { code: sanitizeCode(code, key) };
     }
 
+    // Detect which extra packages the generated code imports
+    const allCode = Object.values(files).join('\n');
+    const extraDeps = {};
+    if (allCode.includes('react-router-dom')) extraDeps['react-router-dom'] = 'latest';
+    if (allCode.includes('lucide-react')) extraDeps['lucide-react'] = 'latest';
+    if (allCode.includes('framer-motion')) extraDeps['framer-motion'] = 'latest';
+    if (allCode.includes('react-icons')) extraDeps['react-icons'] = 'latest';
+
+    // Inject a package.json with detected deps so Sandpack can resolve them
+    if (Object.keys(extraDeps).length > 0) {
+        sandpackFiles['/package.json'] = {
+            code: JSON.stringify({
+                dependencies: {
+                    react: '^19.0.0',
+                    'react-dom': '^19.0.0',
+                    ...extraDeps,
+                },
+            }, null, 2),
+        };
+    }
+
     // Ensure App entry exists for React template
     if (template === 'react' && !sandpackFiles['/App.js'] && !sandpackFiles['/App.jsx']) {
         if (sandpackFiles['/index.jsx']) {
@@ -331,14 +352,6 @@ export default function SandpackPreview({ files, template = 'react' }) {
                         template={template === 'vanilla' ? 'vanilla' : 'react'}
                         files={sandpackFiles}
                         theme="dark"
-                        customSetup={{
-                            dependencies: {
-                                'react-router-dom': '^7.0.0',
-                                'lucide-react': '^0.400.0',
-                                'framer-motion': '^11.0.0',
-                                'react-icons': '^5.0.0',
-                            },
-                        }}
                         options={{
                             externalResources: [
                                 "https://cdn.tailwindcss.com",

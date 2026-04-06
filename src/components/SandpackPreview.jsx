@@ -37,14 +37,29 @@ export default function SandpackPreview({ files, template = 'react' }) {
     if (!files || Object.keys(files).length === 0) return null;
 
     // Sanitize generated code — strip imports that crash Sandpack's bundler
+    // Sandpack's React template only has react + react-dom. Any other npm
+    // package import will crash the preview. We strip them here — they'll
+    // work fine when deployed since the scaffold adds proper dependencies.
+    const ALLOWED_PACKAGES = new Set(['react', 'react-dom', 'react/jsx-runtime']);
     const sanitizeCode = (code, filename) => {
         let cleaned = code;
-        // Remove URL imports in JS/JSX: import 'https://...' or import "https://..."
-        cleaned = cleaned.replace(/^import\s+['"]https?:\/\/[^'"]+['"];?\s*$/gm, '');
-        // Remove @import url(...) in CSS
         if (filename.endsWith('.css')) {
+            // Remove @import url(...) and @tailwind directives in CSS
             cleaned = cleaned.replace(/^@import\s+url\([^)]+\);?\s*$/gm, '');
             cleaned = cleaned.replace(/^@tailwind\s+\w+;?\s*$/gm, '');
+        } else {
+            // Remove URL imports: import 'https://...'
+            cleaned = cleaned.replace(/^import\s+['"]https?:\/\/[^'"]+['"];?\s*$/gm, '');
+            // Remove imports of npm packages not available in Sandpack
+            // Matches: import X from 'pkg', import { X } from 'pkg', import 'pkg'
+            cleaned = cleaned.replace(/^import\s+.*?\s+from\s+['"]([^./][^'"]*)['"]\s*;?\s*$/gm, (match, pkg) => {
+                const basePkg = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
+                return ALLOWED_PACKAGES.has(basePkg) ? match : `// [stripped for preview] ${match.trim()}`;
+            });
+            cleaned = cleaned.replace(/^import\s+['"]([^./][^'"]*)['"]\s*;?\s*$/gm, (match, pkg) => {
+                const basePkg = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
+                return ALLOWED_PACKAGES.has(basePkg) ? match : `// [stripped for preview] ${match.trim()}`;
+            });
         }
         return cleaned;
     };
@@ -59,27 +74,6 @@ export default function SandpackPreview({ files, template = 'react' }) {
         // Map .jsx → .js so we override Sandpack's template defaults
         if (key === '/App.jsx') key = '/App.js';
         sandpackFiles[key] = { code: sanitizeCode(code, key) };
-    }
-
-    // Detect which extra packages the generated code imports
-    const allCode = Object.values(files).join('\n');
-    const extraDeps = {};
-    if (allCode.includes('react-router-dom')) extraDeps['react-router-dom'] = 'latest';
-    if (allCode.includes('lucide-react')) extraDeps['lucide-react'] = 'latest';
-    if (allCode.includes('framer-motion')) extraDeps['framer-motion'] = 'latest';
-    if (allCode.includes('react-icons')) extraDeps['react-icons'] = 'latest';
-
-    // Inject a package.json with detected deps so Sandpack can resolve them
-    if (Object.keys(extraDeps).length > 0) {
-        sandpackFiles['/package.json'] = {
-            code: JSON.stringify({
-                dependencies: {
-                    react: '^19.0.0',
-                    'react-dom': '^19.0.0',
-                    ...extraDeps,
-                },
-            }, null, 2),
-        };
     }
 
     // Ensure App entry exists for React template

@@ -72,6 +72,14 @@ export default function SandpackPreview({ files, template = 'react' }) {
         }
     }
 
+    // Escape key exits fullscreen
+    useEffect(() => {
+        if (!expanded) return;
+        const handler = (e) => { if (e.key === 'Escape') setExpanded(false); };
+        document.addEventListener('keydown', handler);
+        return () => document.removeEventListener('keydown', handler);
+    }, [expanded]);
+
     // Close deploy menu on outside click
     useEffect(() => {
         if (!showDeployMenu) return;
@@ -198,11 +206,24 @@ export default function SandpackPreview({ files, template = 'react' }) {
     };
 
     const fileCount = Object.keys(files).length;
-    const containerHeight = expanded ? '600px' : '420px';
+    const containerHeight = expanded ? '85vh' : '500px';
     const isDeploying = deployState === 'deploying' || deployState === 'polling';
 
     return (
-        <div className="sandpack-preview-container" style={{ height: expanded ? 'auto' : undefined }}>
+        <div
+            className="sandpack-preview-container"
+            style={expanded ? {
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 1000,
+                borderRadius: 0,
+                height: '100vh',
+                margin: 0,
+            } : undefined}
+        >
             {/* Header */}
             <div className="sandpack-header">
                 <div className="sandpack-header-left">
@@ -271,7 +292,8 @@ export default function SandpackPreview({ files, template = 'react' }) {
                     <button
                         className="sandpack-action-btn"
                         onClick={() => setExpanded(!expanded)}
-                        title={expanded ? 'Collapse' : 'Expand'}
+                        title={expanded ? 'Exit fullscreen' : 'Fullscreen'}
+                        style={expanded ? { color: 'var(--sandpack-accent)' } : undefined}
                     >
                         {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                     </button>
@@ -320,7 +342,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
             )}
 
             {/* Sandpack Renderer */}
-            <div style={{ height: containerHeight, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
+            <div style={{ height: containerHeight, overflow: 'hidden', borderRadius: expanded ? 0 : '0 0 12px 12px', flex: expanded ? 1 : undefined }}>
                 <Suspense fallback={
                     <div className="sandpack-loading">
                         <div className="sandpack-loading-spinner" />

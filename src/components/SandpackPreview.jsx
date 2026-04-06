@@ -336,7 +336,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
                                 "https://cdn.tailwindcss.com",
                                 "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@600;700;800&display=swap",
                             ],
-                            showNavigator: true,
+                            showNavigator: false,
                             showTabs: true,
                             showLineNumbers: true,
                             editorHeight: parseInt(containerHeight),

@@ -377,7 +377,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
                     <SandpackLazy
                         template={template === 'vanilla' ? 'vanilla' : 'react'}
                         files={sandpackFiles}
-                        theme="dark"
+                        theme="light"
                         customSetup={Object.keys(detectedDeps).length > 0 ? { dependencies: detectedDeps } : undefined}
                         options={{
                             externalResources: [

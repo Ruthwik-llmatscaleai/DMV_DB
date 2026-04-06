@@ -37,17 +37,25 @@ export default function SandpackPreview({ files, template = 'react' }) {
     if (!files || Object.keys(files).length === 0) return null;
 
     // Prepare files for Sandpack format
+    // Sandpack's React template has a default /App.js that shows "Hello World".
+    // We must map /App.jsx → /App.js to override it, otherwise both exist
+    // and the template's index.js imports the default one.
     const sandpackFiles = {};
     for (const [name, code] of Object.entries(files)) {
-        const key = name.startsWith('/') ? name : `/${name}`;
+        let key = name.startsWith('/') ? name : `/${name}`;
+        // Map .jsx → .js so we override Sandpack's template defaults
+        if (key === '/App.jsx') key = '/App.js';
         sandpackFiles[key] = { code };
     }
 
-    // Ensure App.jsx exists for React template
-    if (template === 'react' && !sandpackFiles['/App.jsx'] && !sandpackFiles['/App.js']) {
+    // Ensure App entry exists for React template
+    if (template === 'react' && !sandpackFiles['/App.js'] && !sandpackFiles['/App.jsx']) {
         if (sandpackFiles['/index.jsx']) {
-            sandpackFiles['/App.jsx'] = sandpackFiles['/index.jsx'];
+            sandpackFiles['/App.js'] = sandpackFiles['/index.jsx'];
             delete sandpackFiles['/index.jsx'];
+        } else if (sandpackFiles['/index.js']) {
+            sandpackFiles['/App.js'] = sandpackFiles['/index.js'];
+            delete sandpackFiles['/index.js'];
         }
     }
 

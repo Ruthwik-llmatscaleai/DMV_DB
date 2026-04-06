@@ -158,6 +158,7 @@ function buildTransportFromUrl(rawUrl) {
 
 // GET /api/connectors
 app.get('/api/connectors', async (req, res) => {
+    try {
     const list = [];
     for (const [id, c] of activeConnectors.entries()) {
         let tools = [];
@@ -172,6 +173,10 @@ app.get('/api/connectors', async (req, res) => {
         list.push({ id, name: c.name, status: c.status, tools });
     }
     res.json(list);
+    } catch (e) {
+        console.error('[API] /connectors error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // POST /api/connectors
@@ -1101,4 +1106,24 @@ app.get('/api/test-tool', async (req, res) => {
 });
 
 // Export the app for Vercel serverless environment
+// Health check for debugging
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        connectors: activeConnectors.size,
+        env: {
+            GROQ_API_KEY: !!process.env.GROQ_API_KEY,
+            GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
+            DEPLOY_VERCEL_TOKEN: !!process.env.DEPLOY_VERCEL_TOKEN,
+            GITHUB_TOKEN: !!process.env.GITHUB_TOKEN,
+        },
+    });
+});
+
+// Global error handler so Express doesn't return HTML on unhandled errors
+app.use((err, req, res, next) => {
+    console.error('[API] Unhandled error:', err.message, err.stack);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+});
+
 export default app;

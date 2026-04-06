@@ -84,21 +84,30 @@ async function startBridge() {
         }
     );
 
-    // 3. Set up SSE Transport
-    let sseTransport;
+    // 3. Set up SSE Transport (supports multiple concurrent clients)
+    const sseTransports = new Map();
 
     app.get('/mcp', async (req, res) => {
         console.log('[DEBUG] New SSE connection at /mcp');
-        sseTransport = new SSEServerTransport('/message', res);
-        await server.connect(sseTransport);
-        console.log('[DEBUG] Server bound to SSE transport');
+        const transport = new SSEServerTransport('/message', res);
+        sseTransports.set(transport.sessionId, transport);
+
+        res.on('close', () => {
+            sseTransports.delete(transport.sessionId);
+            console.log(`[DEBUG] SSE session ${transport.sessionId} closed`);
+        });
+
+        await server.connect(transport);
+        console.log(`[DEBUG] Server bound to SSE transport (session: ${transport.sessionId})`);
     });
 
     app.post('/message', async (req, res) => {
-        if (sseTransport) {
-            await sseTransport.handlePostMessage(req, res);
+        const sessionId = req.query.sessionId;
+        const transport = sseTransports.get(sessionId);
+        if (transport) {
+            await transport.handlePostMessage(req, res);
         } else {
-            res.status(404).send('No active SSE session');
+            res.status(404).send('No active SSE session for this ID');
         }
     });
 

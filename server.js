@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
@@ -722,8 +723,6 @@ app.get('/api/test-tool', async (req, res) => {
 // -----------------------------------------------------------------------
 // Static Frontend Serving (For Docker / Production)
 // -----------------------------------------------------------------------
-import { fileURLToPath } from 'url';
-
 const distPath = path.join(__dirname, 'dist');
 
 if (fs.existsSync(distPath)) {

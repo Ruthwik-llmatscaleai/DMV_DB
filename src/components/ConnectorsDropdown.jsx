@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown, Server, Box, Link as LinkIcon, Terminal, Trash2, Edit2, X, Check, RefreshCw, AlertCircle } from 'lucide-react';
 
 export default function ConnectorsDropdown() {
@@ -59,7 +59,7 @@ export default function ConnectorsDropdown() {
         }
     };
 
-    const fetchConnectors = async () => {
+    const fetchConnectors = useCallback(async () => {
         try {
             const res = await fetch(`${API_URL}/connectors`);
             const data = await res.json();
@@ -67,7 +67,7 @@ export default function ConnectorsDropdown() {
         } catch (e) {
             console.error('Failed to fetch connectors:', e);
         }
-    };
+    }, [API_URL]);
 
     // Auto-reconnect saved connectors on mount (handles Vercel cold starts & reloads)
     const autoReconnectSavedConnectors = async () => {
@@ -108,7 +108,7 @@ export default function ConnectorsDropdown() {
         autoReconnectSavedConnectors();
         const interval = setInterval(fetchConnectors, 5000);
         return () => clearInterval(interval);
-    }, []);
+    }, [fetchConnectors]);
 
     useEffect(() => {
         function handleClickOutside(event) {

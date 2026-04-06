@@ -188,6 +188,8 @@ export default function Chat() {
     }, [threads]);
 
     const activeThread = threads.find(t => t.id === activeThreadId) || threads[0];
+    const activeThreadRef = useRef(activeThread);
+    activeThreadRef.current = activeThread;
 
     // Scroll to bottom
     const scrollToBottom = useCallback((behavior = 'smooth') => {
@@ -214,6 +216,7 @@ export default function Chat() {
     const sendMessage = useCallback(async ({ text }) => {
         if (!text.trim()) return;
 
+        const thread = activeThreadRef.current;
         const fullPrompt = text;
         const now = Date.now();
         const userMessage = {
@@ -224,11 +227,11 @@ export default function Chat() {
             timestamp: now,
         };
 
-        const previousMessages = activeThread.messages;
+        const previousMessages = thread.messages;
         const isFirstUserMessage = previousMessages.filter(m => m.role === 'user').length === 0;
         const newTitle = isFirstUserMessage && text
             ? text.slice(0, 40) + (text.length > 40 ? '…' : '')
-            : activeThread.title;
+            : thread.title;
 
         setLastUserPayload({ text });
         setFailedMessageId(null);
@@ -249,8 +252,8 @@ export default function Chat() {
 
             // Include codeSnapshot for context compression on code-editing follow-ups
             const requestBody = { messages: contextToSend };
-            if (activeThread.codeSnapshot && Object.keys(activeThread.codeSnapshot).length > 0) {
-                requestBody.codeSnapshot = activeThread.codeSnapshot;
+            if (thread.codeSnapshot && Object.keys(thread.codeSnapshot).length > 0) {
+                requestBody.codeSnapshot = thread.codeSnapshot;
             }
 
             const response = await fetch(`${API_URL}/chat`, {
@@ -295,7 +298,7 @@ export default function Chat() {
         } finally {
             setIsLoading(false);
         }
-    }, [activeThread, activeThreadId]);
+    }, [activeThreadId]);
 
     const handleSendMessage = (payload) => sendMessage(payload);
 
@@ -448,7 +451,7 @@ export default function Chat() {
                     <button
                         className="btn btn-ghost w-full justify-start gap-2"
                         style={{ padding: '0.5rem', fontSize: '0.875rem' }}
-                        onClick={() => navigate('/login')}
+                        onClick={() => { sessionStorage.removeItem('dmv_logged_in'); navigate('/login'); }}
                     >
                         <LogOut size={16} /> Log out
                     </button>

@@ -378,7 +378,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
                         template={template === 'vanilla' ? 'vanilla' : 'react'}
                         files={sandpackFiles}
                         theme="dark"
-                        dependencies={Object.keys(detectedDeps).length > 0 ? detectedDeps : undefined}
+                        customSetup={Object.keys(detectedDeps).length > 0 ? { dependencies: detectedDeps } : undefined}
                         options={{
                             externalResources: [
                                 "https://cdn.tailwindcss.com",

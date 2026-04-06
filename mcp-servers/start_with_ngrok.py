@@ -6,9 +6,12 @@ from pyngrok import ngrok
 
 # --- Configuration ---
 PORT = 8002
-VENV_PATH = "/Users/rajasekharbandreddy/Downloads/bq_mcp_test/venv"
+# Using relative paths for portability
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+VENV_PATH = os.path.join(PROJECT_ROOT, "venv")
 PYTHON_EXEC = os.path.join(VENV_PATH, "bin", "python3")
-MCP_SCRIPT = "/Users/rajasekharbandreddy/Downloads/bq_mcp_test/bq_mcp_server.py"
+MCP_SCRIPT = os.path.join(SCRIPT_DIR, "bq_mcp_server.py")
 
 # --- Helper: Kill existing process on port ---
 def kill_port(port):
@@ -59,7 +62,7 @@ try:
     print(f"Legacy MCP URL: {public_url}/mcp")
     
     # Write the base URL to a file so the agent/user can find it easily
-    with open("/Users/rajasekharbandreddy/Downloads/bq_mcp_test/mcp_url.txt", "w") as f:
+    with open(os.path.join(SCRIPT_DIR, "mcp_url.txt"), "w") as f:
         f.write(public_url)
 
     print("\nKeep this process running to maintain the tunnel.")

@@ -3,5 +3,15 @@
     "name": "DMV Production Database",
     "url": "https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/mcp",
     "type": "mcp"
+  },
+  {
+    "name": "Salesforce Hosted (Schema)",
+    "url": "https://api.salesforce.com/platform/mcp/v1-beta.2/platform/salesforce-api-context",
+    "type": "mcp"
+  },
+  {
+    "name": "Salesforce Local (zrok)",
+    "url": "https://7yzqg21ga6f7.share.zrok.io/mcp",
+    "type": "mcp"
   }
 ]

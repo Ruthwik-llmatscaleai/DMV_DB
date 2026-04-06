@@ -743,9 +743,9 @@ app.post('/api/deploy', async (req, res) => {
 
     try {
         if (target === 'vercel') {
-            const VERCEL_TOKEN = process.env.VERCEL_TOKEN;
+            const VERCEL_TOKEN = process.env.DEPLOY_VERCEL_TOKEN;
             if (!VERCEL_TOKEN) {
-                return res.status(400).json({ error: 'VERCEL_TOKEN not configured in .env' });
+                return res.status(400).json({ error: 'DEPLOY_VERCEL_TOKEN not configured in .env' });
             }
 
             const deployFiles = scaffoldForVercel(files, template, projectName);
@@ -886,7 +886,7 @@ app.get('/api/deploy/status', async (req, res) => {
 
     try {
         if (target === 'vercel') {
-            const VERCEL_TOKEN = process.env.VERCEL_TOKEN;
+            const VERCEL_TOKEN = process.env.DEPLOY_VERCEL_TOKEN;
             const teamId = process.env.VERCEL_TEAM_ID;
             const url = `https://api.vercel.com/v13/deployments/${id}${teamId ? `?teamId=${teamId}` : ''}`;
             const response = await fetch(url, { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } });

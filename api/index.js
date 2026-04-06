@@ -109,6 +109,7 @@ function buildTransportFromUrl(rawUrl) {
 
     const parsed = new URL(formattedUrl);
     const isLegacySSE = parsed.pathname.endsWith('/sse');
+    const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
     const isZrok = parsed.hostname.includes('zrok.io');
     const ZROK_TOKEN = 'Bearer zrok-secure-secret-token-123';
 
@@ -134,7 +135,7 @@ function buildTransportFromUrl(rawUrl) {
         }
         : undefined;
 
-    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isZrok ? ' [secured]' : ''}`);
+    console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isSecureTunnel ? ' [secured]' : ''}`);
 
     if (isLegacySSE) {
         return new SSEClientTransport(parsed, {

@@ -36,15 +36,38 @@ export default function SandpackPreview({ files, template = 'react' }) {
 
     if (!files || Object.keys(files).length === 0) return null;
 
-    // Light sanitization — only strip things that definitely crash Sandpack
+    // Sanitize generated code — strip things that crash Sandpack's bundler
+    // Sandpack only has react + react-dom. Other packages cause "Could not find dependency".
+    const ALLOWED_PACKAGES = new Set(['react', 'react-dom', 'react/jsx-runtime']);
     const sanitizeCode = (code, filename) => {
         let cleaned = code;
         if (filename.endsWith('.css')) {
             cleaned = cleaned.replace(/^@import\s+url\([^)]+\);?\s*$/gm, '');
             cleaned = cleaned.replace(/^@tailwind\s+\w+;?\s*$/gm, '');
         } else {
-            // Remove URL imports (import 'https://...') — Sandpack can't handle these
+            // Remove URL imports
             cleaned = cleaned.replace(/^import\s+['"]https?:\/\/[^'"]+['"];?\s*$/gm, '');
+            // Strip npm package imports that aren't available in Sandpack
+            // import X from 'pkg' or import { X } from 'pkg'
+            cleaned = cleaned.replace(/^(import\s+.*?\s+from\s+['"])([^./][^'"]*?)(['"].*$)/gm, (match, pre, pkg, post) => {
+                const base = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
+                return ALLOWED_PACKAGES.has(base) ? match : '';
+            });
+            // import 'pkg' (side-effect only)
+            cleaned = cleaned.replace(/^import\s+['"]([^./][^'"]*)['"]\s*;?\s*$/gm, (match, pkg) => {
+                const base = pkg.startsWith('@') ? pkg.split('/').slice(0, 2).join('/') : pkg.split('/')[0];
+                return ALLOWED_PACKAGES.has(base) ? match : '';
+            });
+            // Remove JSX that uses Router/Routes/Route components since we stripped the import
+            cleaned = cleaned.replace(/<BrowserRouter[\s>][\s\S]*?<\/BrowserRouter>/g, (routerBlock) => {
+                // Extract the inner content of Route elements' element prop
+                const routeMatch = routerBlock.match(/element=\{<(\w+)\s*\/>\}/);
+                return routeMatch ? `<${routeMatch[1]} />` : '<div>App Content</div>';
+            });
+            cleaned = cleaned.replace(/<Router[\s>][\s\S]*?<\/Router>/g, (routerBlock) => {
+                const routeMatch = routerBlock.match(/element=\{<(\w+)\s*\/>\}/);
+                return routeMatch ? `<${routeMatch[1]} />` : '<div>App Content</div>';
+            });
         }
         return cleaned;
     };
@@ -206,24 +229,25 @@ export default function SandpackPreview({ files, template = 'react' }) {
     };
 
     const fileCount = Object.keys(files).length;
-    const containerHeight = expanded ? '85vh' : '500px';
     const isDeploying = deployState === 'deploying' || deployState === 'polling';
 
+    const fullscreenStyle = expanded ? {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 1000,
+        borderRadius: 0,
+        margin: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        width: '100vw',
+    } : undefined;
+
     return (
-        <div
-            className="sandpack-preview-container"
-            style={expanded ? {
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                zIndex: 1000,
-                borderRadius: 0,
-                height: '100vh',
-                margin: 0,
-            } : undefined}
-        >
+        <div className="sandpack-preview-container" style={fullscreenStyle}>
             {/* Header */}
             <div className="sandpack-header">
                 <div className="sandpack-header-left">
@@ -342,7 +366,13 @@ export default function SandpackPreview({ files, template = 'react' }) {
             )}
 
             {/* Sandpack Renderer */}
-            <div style={{ height: containerHeight, overflow: 'hidden', borderRadius: expanded ? 0 : '0 0 12px 12px', flex: expanded ? 1 : undefined }}>
+            <div style={{
+                height: expanded ? undefined : '500px',
+                flex: expanded ? 1 : undefined,
+                overflow: 'hidden',
+                borderRadius: expanded ? 0 : '0 0 12px 12px',
+                minHeight: 0,
+            }}>
                 <Suspense fallback={
                     <div className="sandpack-loading">
                         <div className="sandpack-loading-spinner" />
@@ -361,7 +391,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
                             showNavigator: false,
                             showTabs: true,
                             showLineNumbers: true,
-                            editorHeight: parseInt(containerHeight),
+                            editorHeight: expanded ? window.innerHeight - 80 : 500,
                             activeFile: Object.keys(sandpackFiles)[0],
                             layout: activeView === 'code' ? 'console' : 'preview',
                         }}

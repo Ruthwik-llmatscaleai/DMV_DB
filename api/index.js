@@ -418,7 +418,7 @@ async function callGemini(messages, maxTokens = 16384) {
         }
 
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -656,7 +656,7 @@ app.post('/api/chat', async (req, res) => {
                     model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
                     messages: groqCodeMessages,
                     temperature: 0.4,
-                    max_tokens: 16384,
+                    max_tokens: 8192,
                 };
 
                 const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {

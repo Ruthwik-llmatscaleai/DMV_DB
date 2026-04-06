@@ -351,7 +351,9 @@ Tailwind CSS and Google Fonts are pre-loaded in the preview environment. Use the
 
 **Important:**
 - Use Tailwind utility classes for ALL styling. Avoid writing custom CSS unless absolutely necessary.
-- If you must write CSS, put it in styles.css. But prefer Tailwind classes.`;
+- If you must write CSS, put it in styles.css. But prefer Tailwind classes.
+- NEVER import URLs in JavaScript/JSX files (e.g. import 'https://...'). This causes build errors.
+- Google Fonts and Tailwind are already pre-loaded in the environment. Do NOT add import statements, link tags, or script tags for them in your code. Just use the classes and font names directly.`;
 
 // -----------------------------------------------------------------------
 // Intent Detection — routes user message to the right provider

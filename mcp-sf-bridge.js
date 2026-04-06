@@ -8,9 +8,9 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 // Configure the Salesforce MCP Local command
-// Using npx -y should be non-interactive.
 const SF_MCP_COMMAND = 'npx';
 const SF_MCP_ARGS = [
     '-y',
@@ -22,8 +22,7 @@ const SF_MCP_ARGS = [
 ];
 
 async function startBridge() {
-    console.log('--- Salesforce MCP HTTP Bridge (v2) ---');
-    console.log(`Port: 8002`);
+    console.log('--- Salesforce MCP HTTP Bridge (v3) ---');
 
     // 1. Create the Proxy Server
     const server = new Server({
@@ -40,13 +39,12 @@ async function startBridge() {
 
     async function ensureUpstream() {
         if (upstreamClient) return upstreamClient;
-        
-        console.log(`[DEBUG] Connecting to upstream: ${SF_MCP_COMMAND} ${SF_MCP_ARGS.join(' ')}`);
+
+        console.log(`[Bridge] Connecting to upstream: ${SF_MCP_COMMAND} ${SF_MCP_ARGS.join(' ')}`);
         const stdioTransport = new StdioClientTransport({
             command: SF_MCP_COMMAND,
             args: SF_MCP_ARGS,
-            // Log child stderr to bridge stdout
-            stderr: "inherit" 
+            stderr: "inherit"
         });
 
         const client = new Client({
@@ -58,11 +56,11 @@ async function startBridge() {
 
         try {
             await client.connect(stdioTransport);
-            console.log('[DEBUG] Connected to Salesforce CLI MCP (stdio)');
+            console.log('[Bridge] Connected to Salesforce CLI MCP (stdio)');
             upstreamClient = client;
             return client;
         } catch (err) {
-            console.error('[ERROR] Failed to connect to SF DX MCP:', err);
+            console.error('[Bridge] Failed to connect to SF CLI MCP:', err);
             throw err;
         }
     }
@@ -84,21 +82,21 @@ async function startBridge() {
         }
     );
 
-    // 3. Set up SSE Transport (supports multiple concurrent clients)
+    // 3. SSE Transport at /sse (so auto-detection in buildTransportFromUrl works)
     const sseTransports = new Map();
 
-    app.get('/mcp', async (req, res) => {
-        console.log('[DEBUG] New SSE connection at /mcp');
+    app.get('/sse', async (req, res) => {
+        console.log('[Bridge] New SSE connection at /sse');
         const transport = new SSEServerTransport('/message', res);
         sseTransports.set(transport.sessionId, transport);
 
         res.on('close', () => {
             sseTransports.delete(transport.sessionId);
-            console.log(`[DEBUG] SSE session ${transport.sessionId} closed`);
+            console.log(`[Bridge] SSE session ${transport.sessionId} closed`);
         });
 
         await server.connect(transport);
-        console.log(`[DEBUG] Server bound to SSE transport (session: ${transport.sessionId})`);
+        console.log(`[Bridge] SSE transport ready (session: ${transport.sessionId})`);
     });
 
     app.post('/message', async (req, res) => {
@@ -107,14 +105,20 @@ async function startBridge() {
         if (transport) {
             await transport.handlePostMessage(req, res);
         } else {
-            res.status(404).send('No active SSE session for this ID');
+            res.status(404).json({ error: 'No active SSE session for this ID' });
         }
+    });
+
+    // Health check
+    app.get('/health', (req, res) => {
+        res.json({ status: 'ok', upstream: upstreamClient ? 'connected' : 'not connected' });
     });
 
     const PORT = process.env.PORT || 8002;
     app.listen(PORT, () => {
-        console.log(`Salesforce MCP HTTP Bridge listening on port ${PORT}`);
-        console.log(`Expose this using: zrok share public http://localhost:${PORT}`);
+        console.log(`Salesforce MCP Bridge listening on port ${PORT}`);
+        console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
+        console.log(`\nTo expose via zrok:\n  zrok share public http://localhost:${PORT}`);
     });
 }
 

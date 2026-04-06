@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { scaffoldForVercel, scaffoldForGitHub } from './scaffold.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -305,6 +306,7 @@ Chain multiple tool calls as needed. There is no limit.
 const CODE_GEN_SYSTEM_PROMPT = `You are Atlas, an expert web developer assistant.
 When asked to build, create, or generate a website, app, landing page, dashboard, or UI component:
 
+## Output Format
 1. Output complete, working code using XML file tags:
    <file name="App.jsx">
    // complete code here
@@ -315,13 +317,41 @@ When asked to build, create, or generate a website, app, landing page, dashboard
 
 2. Always include App.jsx as the main entry point for React projects.
 3. Use modern React with hooks and functional components.
-4. Make the design visually impressive — use gradients, animations, modern typography (e.g. Inter, Poppins from Google Fonts via CDN).
-5. Keep each file under 200 lines to stay within output limits.
-6. After the code blocks, add a brief 2-3 sentence description of what you built and what the user can modify.
-7. For complex requests, build the core layout first and tell the user they can ask to modify specific sections.
-8. When modifying existing code, output ALL files again with changes applied (not just the diff).
-9. For vanilla HTML/CSS requests, use <template>vanilla</template> before the file blocks.
-10. Do NOT use markdown code fences. ONLY use the <file name="..."> XML tags.`;
+4. Keep each file under 200 lines to stay within output limits.
+5. After the code blocks, add a brief 2-3 sentence description of what you built and what the user can modify.
+6. For complex requests, build the core layout first and tell the user they can ask to modify specific sections.
+7. When modifying existing code, output ALL files again with changes applied (not just the diff).
+8. For vanilla HTML/CSS requests, use <template>vanilla</template> before the file blocks.
+9. Do NOT use markdown code fences. ONLY use the <file name="..."> XML tags.
+
+## Design System (ALWAYS use these)
+Tailwind CSS and Google Fonts are pre-loaded in the preview environment. Use them directly.
+
+**Colors:**
+- Primary: #3B82F6 (blue-500), Secondary: #8B5CF6 (violet-500), Accent: #F59E0B (amber-500)
+- Neutral: #1F2937 (gray-800), Light Gray: #F3F4F6 (gray-100), Background: #F9FAFB (gray-50)
+- Success: #10B981 (emerald-500), Error: #EF4444 (red-500), Warning: #F59E0B (amber-500)
+
+**Typography:**
+- Body font: font-family 'Inter' (use class font-sans, it maps to Inter)
+- Heading font: font-family 'Poppins' (use inline style or a custom class)
+- Use responsive text sizes: text-sm, text-base, text-lg, text-xl, text-2xl, text-4xl, text-5xl
+
+**Spacing & Layout:**
+- Use Tailwind spacing: p-2, p-4, p-6, p-8, m-2, m-4, gap-4, gap-6, gap-8
+- Border radius: rounded-md (default), rounded-lg (cards), rounded-xl (large cards), rounded-full (avatars)
+- Use flex and grid layouts: flex, grid, grid-cols-2, grid-cols-3, gap-6
+
+**Visual Style:**
+- Use gradients: bg-gradient-to-r, bg-gradient-to-br with from-blue-500 to-violet-500, etc.
+- Add subtle shadows: shadow-sm, shadow-md, shadow-lg, shadow-xl
+- Add hover transitions: transition-all duration-300 hover:shadow-lg hover:-translate-y-1
+- Use backdrop blur for glassmorphism: backdrop-blur-md bg-white/80
+- Prefer: modern, clean, spacious layouts with plenty of whitespace
+
+**Important:**
+- Use Tailwind utility classes for ALL styling. Avoid writing custom CSS unless absolutely necessary.
+- If you must write CSS, put it in styles.css. But prefer Tailwind classes.`;
 
 // -----------------------------------------------------------------------
 // Intent Detection — routes user message to the right provider
@@ -804,6 +834,228 @@ app.post('/api/chat', async (req, res) => {
             role: 'assistant',
             content: 'Something went wrong on my end. Please try again.',
         });
+    }
+});
+
+// -----------------------------------------------------------------------
+// POST /api/deploy — Deploy generated site to Vercel or GitHub Pages
+// -----------------------------------------------------------------------
+app.post('/api/deploy', async (req, res) => {
+    const { files, template = 'react', projectName, target = 'vercel' } = req.body;
+
+    if (!files || Object.keys(files).length === 0) {
+        return res.status(400).json({ error: 'No files provided' });
+    }
+
+    try {
+        if (target === 'vercel') {
+            const VERCEL_TOKEN = process.env.VERCEL_TOKEN;
+            if (!VERCEL_TOKEN) {
+                return res.status(400).json({ error: 'VERCEL_TOKEN not configured in .env' });
+            }
+
+            const deployFiles = scaffoldForVercel(files, template, projectName);
+            const name = (projectName || `atlas-${Date.now()}`).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+
+            const body = {
+                name,
+                files: deployFiles,
+                projectSettings: {
+                    framework: 'vite',
+                    buildCommand: 'npm run build',
+                    outputDirectory: 'dist',
+                },
+            };
+
+            const teamId = process.env.VERCEL_TEAM_ID;
+            const url = `https://api.vercel.com/v13/deployments${teamId ? `?teamId=${teamId}` : ''}`;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${VERCEL_TOKEN}`,
+                },
+                body: JSON.stringify(body),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                console.error('[Deploy] Vercel API error:', JSON.stringify(data));
+                return res.status(response.status).json({
+                    error: data.error?.message || data.error?.code || 'Vercel deployment failed',
+                });
+            }
+
+            console.log(`[Deploy] Vercel deployment created: ${data.url}`);
+            return res.json({
+                deploymentId: data.id,
+                url: `https://${data.url}`,
+                target: 'vercel',
+                status: 'building',
+            });
+
+        } else if (target === 'github') {
+            const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+            if (!GITHUB_TOKEN) {
+                return res.status(400).json({ error: 'GITHUB_TOKEN not configured in .env' });
+            }
+
+            const ghHeaders = {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${GITHUB_TOKEN}`,
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+            };
+
+            const repoName = (projectName || `atlas-${Date.now()}`).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+
+            // 1. Create repo
+            const createRepoRes = await fetch('https://api.github.com/user/repos', {
+                method: 'POST',
+                headers: ghHeaders,
+                body: JSON.stringify({
+                    name: repoName,
+                    description: 'Generated by DMV Atlas',
+                    private: false,
+                    auto_init: false,
+                }),
+            });
+
+            const repoData = await createRepoRes.json();
+            if (!createRepoRes.ok) {
+                console.error('[Deploy] GitHub create repo error:', JSON.stringify(repoData));
+                return res.status(createRepoRes.status).json({
+                    error: repoData.message || 'Failed to create GitHub repo',
+                });
+            }
+
+            const owner = repoData.owner.login;
+            const repo = repoData.name;
+            console.log(`[Deploy] GitHub repo created: ${owner}/${repo}`);
+
+            // 2. Push files (sequentially — each commit needs the previous tree SHA)
+            const ghFiles = scaffoldForGitHub(files, template, repoName);
+            for (const file of ghFiles) {
+                const putRes = await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`,
+                    {
+                        method: 'PUT',
+                        headers: ghHeaders,
+                        body: JSON.stringify({
+                            message: `Add ${file.path}`,
+                            content: file.content,
+                        }),
+                    }
+                );
+                if (!putRes.ok) {
+                    const err = await putRes.json().catch(() => ({}));
+                    console.warn(`[Deploy] Failed to push ${file.path}:`, err.message);
+                }
+            }
+
+            console.log(`[Deploy] Pushed ${ghFiles.length} files to ${owner}/${repo}`);
+
+            // 3. Enable GitHub Pages (uses Actions as source)
+            const pagesRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/pages`,
+                {
+                    method: 'POST',
+                    headers: ghHeaders,
+                    body: JSON.stringify({
+                        build_type: 'workflow',
+                    }),
+                }
+            );
+
+            if (!pagesRes.ok) {
+                const pagesErr = await pagesRes.json().catch(() => ({}));
+                console.warn('[Deploy] GitHub Pages enable warning:', pagesErr.message);
+            }
+
+            const siteUrl = `https://${owner}.github.io/${repo}/`;
+            console.log(`[Deploy] GitHub Pages will be at: ${siteUrl}`);
+
+            return res.json({
+                deploymentId: `${owner}/${repo}`,
+                url: siteUrl,
+                repoUrl: repoData.html_url,
+                target: 'github',
+                status: 'building',
+            });
+
+        } else {
+            return res.status(400).json({ error: `Unknown deploy target: ${target}` });
+        }
+    } catch (error) {
+        console.error('[Deploy] Unexpected error:', error);
+        res.status(500).json({ error: error.message || 'Deployment failed' });
+    }
+});
+
+// -----------------------------------------------------------------------
+// GET /api/deploy/status — Check deployment status
+// -----------------------------------------------------------------------
+app.get('/api/deploy/status', async (req, res) => {
+    const { id, target } = req.query;
+
+    if (!id || !target) {
+        return res.status(400).json({ error: 'Missing id or target parameter' });
+    }
+
+    try {
+        if (target === 'vercel') {
+            const VERCEL_TOKEN = process.env.VERCEL_TOKEN;
+            const teamId = process.env.VERCEL_TEAM_ID;
+            const url = `https://api.vercel.com/v13/deployments/${id}${teamId ? `?teamId=${teamId}` : ''}`;
+
+            const response = await fetch(url, {
+                headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                return res.json({ status: 'ERROR', error: data.error?.message });
+            }
+
+            // Vercel states: BUILDING, READY, ERROR, QUEUED, CANCELED
+            const status = data.readyState || data.state || 'BUILDING';
+            return res.json({
+                status: status === 'READY' ? 'READY' : status === 'ERROR' || status === 'CANCELED' ? 'ERROR' : 'BUILDING',
+                url: `https://${data.url}`,
+            });
+
+        } else if (target === 'github') {
+            // id is "owner/repo"
+            const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+            const response = await fetch(
+                `https://api.github.com/repos/${id}/pages`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${GITHUB_TOKEN}`,
+                        Accept: 'application/vnd.github+json',
+                    },
+                }
+            );
+
+            if (!response.ok) {
+                return res.json({ status: 'BUILDING', url: `https://${id.split('/')[0]}.github.io/${id.split('/')[1]}/` });
+            }
+
+            const data = await response.json();
+            // GitHub Pages status can be: null, "built", "building", "errored"
+            const ghStatus = data.status;
+            return res.json({
+                status: ghStatus === 'built' ? 'READY' : ghStatus === 'errored' ? 'ERROR' : 'BUILDING',
+                url: data.html_url || `https://${id.split('/')[0]}.github.io/${id.split('/')[1]}/`,
+            });
+        }
+
+        res.status(400).json({ error: 'Unknown target' });
+    } catch (error) {
+        console.error('[Deploy] Status check error:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 

@@ -24,7 +24,7 @@ const PORT = process.env.PORT || 3001;
 console.log('🚀 DMV Backend STARTUP - v2.1 (Simplified, Auth Removed)');
 
 app.use(cors({
-    origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
+    origin: process.env.ALLOWED_ORIGIN || '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type'],
 }));

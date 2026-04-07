@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { scaffoldForVercel, scaffoldForGitHub } from './api/scaffold.js';
 import { loadSkills, matchSkill, loadSkillReferences } from './api/skillLoader.js';
 import { extractFigmaFileKey, extractNodeId, fetchFigmaFile, fetchFigmaStyles, figmaToContext, isFigmaRequest } from './api/figma.js';
+import { parseGitHubUrl, importGitHubRepo, isGitHubImportRequest } from './api/github-import.js';
 
 dotenv.config();
 
@@ -692,6 +693,38 @@ app.post('/api/chat', async (req, res) => {
         const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
         const lastUserText = getLastUserMessage(messages);
         const figmaReq = isFigmaRequest(lastUserText);
+        const ghImportReq = isGitHubImportRequest(lastUserText);
+
+        // ═══════════════════════════════════════════════════
+        // GITHUB IMPORT PATH
+        // ═══════════════════════════════════════════════════
+        if (ghImportReq) {
+            console.log('[Chat] 📦 GitHub import request detected');
+            const parsed = parseGitHubUrl(lastUserText);
+            if (!parsed) {
+                return res.json({ role: 'assistant', content: 'I couldn\'t parse the GitHub URL. Please paste a link like:\n\n`https://github.com/owner/repo`' });
+            }
+
+            try {
+                const token = process.env.GITHUB_TOKEN;
+                const result = await importGitHubRepo(parsed.owner, parsed.repo, parsed.branch, parsed.subPath, token);
+
+                if (result.fileCount === 0) {
+                    return res.json({ role: 'assistant', content: `I couldn't find any code files in **${parsed.owner}/${parsed.repo}**. The repo might be empty or private.` });
+                }
+
+                let fileBlocks = Object.entries(result.files)
+                    .map(([path, content]) => `<file name="${path}">${content}</file>`)
+                    .join('\n\n');
+
+                const summary = `I imported **${result.fileCount} files** from [${parsed.owner}/${parsed.repo}](${result.repoUrl}). You can preview and edit the code below. Ask me to make changes like "update the header" or "add a contact page".\n\n${fileBlocks}`;
+
+                return res.json({ role: 'assistant', content: summary });
+            } catch (e) {
+                console.error('[GitHub Import] Error:', e.message);
+                return res.json({ role: 'assistant', content: `Failed to import from GitHub: ${e.message}` });
+            }
+        }
 
         // ═══════════════════════════════════════════════════
         // FIGMA → CODE PATH

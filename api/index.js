@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { scaffoldForVercel, scaffoldForGitHub } from './scaffold.js';
 import { loadSkills, matchSkill, loadSkillReferences } from './skillLoader.js';
 import { extractFigmaFileKey, extractNodeId, fetchFigmaFile, fetchFigmaStyles, figmaToContext, isFigmaRequest } from './figma.js';
+import { parseGitHubUrl, importGitHubRepo, isGitHubImportRequest } from './github-import.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -740,6 +741,39 @@ app.post('/api/chat', async (req, res) => {
         const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
         const lastUserText = getLastUserMessage(messages);
         const figmaReq = isFigmaRequest(lastUserText);
+        const ghImportReq = isGitHubImportRequest(lastUserText);
+
+        // ═══════════════════════════════════════════════════
+        // GITHUB IMPORT PATH
+        // ═══════════════════════════════════════════════════
+        if (ghImportReq) {
+            console.log('[Chat] 📦 GitHub import request detected');
+            const parsed = parseGitHubUrl(lastUserText);
+            if (!parsed) {
+                return res.json({ role: 'assistant', content: 'I couldn\'t parse the GitHub URL. Please paste a link like:\n\n`https://github.com/owner/repo`' });
+            }
+
+            try {
+                const token = process.env.GITHUB_TOKEN;
+                const result = await importGitHubRepo(parsed.owner, parsed.repo, parsed.branch, parsed.subPath, token);
+
+                if (result.fileCount === 0) {
+                    return res.json({ role: 'assistant', content: `I couldn't find any code files in **${parsed.owner}/${parsed.repo}**. The repo might be empty or private (make sure your GitHub token has access).` });
+                }
+
+                // Build file blocks so MessageRenderer parses them into Sandpack
+                let fileBlocks = Object.entries(result.files)
+                    .map(([path, content]) => `<file name="${path}">${content}</file>`)
+                    .join('\n\n');
+
+                const summary = `I imported **${result.fileCount} files** from [${parsed.owner}/${parsed.repo}](${result.repoUrl}). You can preview and edit the code below. Ask me to make changes like "update the header" or "add a contact page".\n\n${fileBlocks}`;
+
+                return res.json({ role: 'assistant', content: summary });
+            } catch (e) {
+                console.error('[GitHub Import] Error:', e.message);
+                return res.json({ role: 'assistant', content: `Failed to import from GitHub: ${e.message}` });
+            }
+        }
 
         // ═══════════════════════════════════════════════════
         // FIGMA → CODE PATH

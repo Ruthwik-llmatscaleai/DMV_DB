@@ -59,28 +59,6 @@ export default function Login() {
                         Build websites, query databases, convert Figma designs, and deploy — all from a single conversation.
                     </p>
 
-                    <div style={{
-                        display: 'flex',
-                        gap: '0.75rem',
-                        marginTop: '2rem',
-                        flexWrap: 'wrap',
-                        justifyContent: 'center',
-                    }}>
-                        {['BigQuery', 'Salesforce', 'Figma', 'Vercel', 'GitHub'].map(tag => (
-                            <span key={tag} style={{
-                                padding: '0.3rem 0.75rem',
-                                borderRadius: '20px',
-                                border: '1px solid rgba(255,255,255,0.25)',
-                                fontSize: '0.75rem',
-                                color: 'rgba(255,255,255,0.8)',
-                                fontWeight: 500,
-                                letterSpacing: '0.02em',
-                            }}>
-                                {tag}
-                            </span>
-                        ))}
-                    </div>
-
                     <p style={{
                         position: 'absolute',
                         bottom: '1.5rem',
@@ -133,7 +111,7 @@ export default function Login() {
                         <button
                             type="submit"
                             className="btn btn-primary w-full"
-                            style={{ marginTop: '1rem', padding: '0.875rem' }}
+                            style={{ marginTop: '1rem', padding: '0.875rem', fontSize: '1rem', fontWeight: 600 }}
                         >
                             Sign In
                         </button>

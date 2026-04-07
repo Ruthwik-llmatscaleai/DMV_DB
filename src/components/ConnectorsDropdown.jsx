@@ -453,8 +453,20 @@ export default function ConnectorsDropdown() {
                                         </div>
 
                                         {connector.status === 'connected' && connector.tools?.length > 0 && (
-                                            <div className="connector-tools">
-                                                Tools: {connector.tools.join(', ')}
+                                            <div className="connector-tools" style={{ marginTop: '4px' }}>
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '2px' }}>
+                                                    {connector.tools.length} tool{connector.tools.length !== 1 ? 's' : ''}:
+                                                </div>
+                                                {connector.tools.map((tool, i) => {
+                                                    const name = typeof tool === 'string' ? tool : tool.name;
+                                                    const desc = typeof tool === 'object' ? tool.description : '';
+                                                    return (
+                                                        <div key={i} style={{ fontSize: '0.7rem', lineHeight: '1.4', padding: '1px 0' }} title={desc}>
+                                                            <span style={{ color: 'var(--accent)', fontFamily: 'monospace' }}>{name}</span>
+                                                            {desc && <span style={{ color: 'var(--text-secondary)', marginLeft: '4px' }}>— {desc.length > 60 ? desc.slice(0, 60) + '…' : desc}</span>}
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         )}
                                     </div>

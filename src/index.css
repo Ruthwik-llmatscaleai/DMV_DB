@@ -195,7 +195,7 @@ a {
 
 .input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  box-shadow: 0 0 0 3px rgba(193, 95, 60, 0.12);
   outline: none;
 }
 

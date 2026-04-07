@@ -21,17 +21,15 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  /* Background image — abstract AI/data visualization (fallback: dark bg) */
-  background-color: #1f1f1e;
-  background-image: url('https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=1200&q=80');
-  background-size: cover;
-  background-position: center;
+  background: linear-gradient(135deg, #0a1628 0%, #1a3a6b 40%, #2563eb 100%);
 }
 
 .login-left-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(31, 31, 30, 0.92) 0%, rgba(107, 105, 102, 0.78) 50%, rgba(193, 95, 60, 0.65) 100%);
+  background:
+    radial-gradient(ellipse at 30% 50%, rgba(59, 130, 246, 0.15) 0%, transparent 70%),
+    radial-gradient(ellipse at 50% 95%, rgba(193, 95, 60, 0.10) 0%, transparent 50%);
   z-index: 1;
 }
 

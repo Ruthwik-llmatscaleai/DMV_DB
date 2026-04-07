@@ -140,6 +140,117 @@ async function getSalesforceAccessToken() {
     }
 }
 
+// -----------------------------------------------------------------------
+// Salesforce Direct REST API — SOQL queries without MCP bridge/CLI
+// -----------------------------------------------------------------------
+const SF_API_VERSION = 'v62.0';
+
+async function salesforceRestCall(endpoint) {
+    const token = await getSalesforceAccessToken();
+    if (!token) throw new Error('Could not obtain Salesforce access token — check SF_CLIENT_ID / SF_REFRESH_TOKEN / SF_INSTANCE_URL');
+
+    const instanceUrl = process.env.SF_INSTANCE_URL;
+    const res = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}${endpoint}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(Array.isArray(err) ? err[0]?.message : err.message || `Salesforce API ${res.status}`);
+    }
+    return res.json();
+}
+
+function registerSalesforceDataConnector() {
+    const { SF_CLIENT_ID, SF_REFRESH_TOKEN, SF_INSTANCE_URL } = process.env;
+    if (!SF_CLIENT_ID || !SF_REFRESH_TOKEN || !SF_INSTANCE_URL) {
+        console.log('[SF] Salesforce Data connector skipped — missing env vars');
+        return;
+    }
+
+    const id = generateId();
+    activeConnectors.set(id, {
+        name: 'Salesforce Data',
+        status: 'connected',
+        transport: { close: async () => {} },
+        client: {
+            listTools: async () => ({
+                tools: [
+                    {
+                        name: 'salesforce_soql_query',
+                        description: 'Execute a SOQL query against Salesforce to retrieve records (Accounts, Contacts, Cases, Opportunities, custom objects, etc.). Use standard SOQL syntax. Example: SELECT Id, Name FROM Account LIMIT 10',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                query: {
+                                    type: 'string',
+                                    description: 'The SOQL query to execute, e.g. SELECT Id, Name FROM Account WHERE CreatedDate = THIS_YEAR LIMIT 20',
+                                },
+                            },
+                            required: ['query'],
+                        },
+                    },
+                    {
+                        name: 'salesforce_list_objects',
+                        description: 'List all available Salesforce objects (standard and custom) in the connected org. Use this first to discover what data exists before writing SOQL queries.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                filter: {
+                                    type: 'string',
+                                    description: 'Optional filter — "custom" for custom objects only, "standard" for standard only, or leave empty for all',
+                                },
+                            },
+                        },
+                    },
+                ],
+            }),
+            callTool: async ({ name, arguments: args }) => {
+                try {
+                    if (name === 'salesforce_soql_query') {
+                        const q = args?.query;
+                        if (!q) return { content: [{ type: 'text', text: 'Error: "query" parameter is required' }] };
+                        const data = await salesforceRestCall(`/query?q=${encodeURIComponent(q)}`);
+                        const records = (data.records || []).map(r => {
+                            const { attributes, ...fields } = r;
+                            return fields;
+                        });
+                        return {
+                            content: [{ type: 'text', text: JSON.stringify({ totalSize: data.totalSize, done: data.done, records }, null, 2) }],
+                        };
+                    }
+
+                    if (name === 'salesforce_list_objects') {
+                        const data = await salesforceRestCall('/sobjects');
+                        let objects = (data.sobjects || []).filter(o => o.queryable);
+                        if (args?.filter === 'custom') objects = objects.filter(o => o.custom);
+                        else if (args?.filter === 'standard') objects = objects.filter(o => !o.custom);
+                        else {
+                            // Default: show custom objects first, then common standard objects
+                            const custom = objects.filter(o => o.custom);
+                            const commonStd = objects.filter(o => !o.custom && [
+                                'Account','Contact','Lead','Opportunity','Case','Task','Event',
+                                'Campaign','Contract','Order','Product2','Pricebook2','User',
+                                'Asset','Solution','ContentDocument','Report','Dashboard',
+                            ].includes(o.name));
+                            objects = [...custom, ...commonStd];
+                        }
+                        const list = objects.map(o => ({ name: o.name, label: o.label, custom: o.custom }));
+                        return {
+                            content: [{ type: 'text', text: JSON.stringify({ count: list.length, objects: list }, null, 2) }],
+                        };
+                    }
+
+                    return { content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
+                } catch (e) {
+                    return { content: [{ type: 'text', text: `Salesforce API error: ${e.message}` }] };
+                }
+            },
+        },
+    });
+    console.log('[SF] ✅ Salesforce Data connector registered (Direct REST API)');
+}
+
 /**
  * Connects to Salesforce Hosted MCP with OAuth.
  */
@@ -182,6 +293,7 @@ async function connectSalesforceMcp() {
 // Start-up auto-connect
 autoConnectFromRegistry();
 connectSalesforceMcp();
+registerSalesforceDataConnector();
 
 // Load Agent Skills
 const skills = loadSkills(path.join(__dirname, 'skills'));
@@ -219,7 +331,10 @@ app.get('/api/connectors', async (req, res) => {
         if (c.status === 'connected') {
             try {
                 const response = await c.client.listTools();
-                tools = response.tools.map(t => t.name);
+                tools = response.tools.map(t => ({
+                    name: t.name,
+                    description: (t.description || '').slice(0, 150),
+                }));
             } catch (e) {
                 console.error(`[MCP] listTools failed for ${c.name}:`, e.message);
             }
@@ -571,11 +686,13 @@ function compressCodeContext(messages, codeSnapshot) {
 async function buildToolRegistry() {
     const availableTools = [];
     const toolToConnector = new Map();
+    const summaryBlocks = [];
 
     for (const [, c] of activeConnectors.entries()) {
         if (c.status !== 'connected') continue;
         try {
             const { tools = [] } = await c.client.listTools();
+            const toolLines = [];
             for (const tool of tools) {
                 availableTools.push({
                     type: 'function',
@@ -586,13 +703,17 @@ async function buildToolRegistry() {
                     },
                 });
                 toolToConnector.set(tool.name, c);
+                toolLines.push(`  - **${tool.name}** — ${(tool.description || 'No description').slice(0, 150)}`);
             }
+            summaryBlocks.push(`### ${c.name}  ·  ${tools.length} tool${tools.length !== 1 ? 's' : ''}  ·  ✅ Connected\n${toolLines.join('\n')}`);
         } catch (e) {
             console.error('[MCP] listTools error:', e.message);
+            summaryBlocks.push(`### ${c.name}  ·  ⚠️ Unavailable`);
         }
     }
 
-    return { availableTools, toolToConnector };
+    const connectorSummary = summaryBlocks.join('\n\n');
+    return { availableTools, toolToConnector, connectorSummary };
 }
 
 // -----------------------------------------------------------------------
@@ -952,7 +1073,7 @@ ${skillContent}${refContent}`;
         }
 
         // DATA QUERY PATH
-        const { availableTools, toolToConnector } = await buildToolRegistry();
+        const { availableTools, toolToConnector, connectorSummary } = await buildToolRegistry();
 
         const lastMsg = getLastUserMessage(messages);
         const dataSkill = matchSkill(lastMsg, skills);
@@ -960,6 +1081,11 @@ ${skillContent}${refContent}`;
         if (dataSkill) {
             console.log(`[Chat] 📚 Enhancing data query with skill: ${dataSkill.name}`);
             enhancedSystemPrompt += `\n\n## Skill: ${dataSkill.name}\n${dataSkill.content.slice(0, 1500)}`;
+        }
+
+        // Inject connected data sources so the LLM can describe them when asked
+        if (connectorSummary) {
+            enhancedSystemPrompt += `\n\n## Connected Data Sources & Tools\nBelow are all the MCP servers and data connectors currently connected. When users ask what is connected, what tools you have, or what you can do, present this information clearly and helpfully.\n\n${connectorSummary}`;
         }
 
         const messagesToLlm = [

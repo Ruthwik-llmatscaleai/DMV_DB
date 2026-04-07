@@ -4,7 +4,7 @@ import ChatInput from '../components/ChatInput';
 import MessageRenderer from '../components/MessageRenderer';
 import {
     MessageSquarePlus, LogOut, ShieldCheck,
-    Trash2, ChevronDown, Copy, Check, RefreshCw, Database
+    Trash2, ChevronDown, Copy, Check, RefreshCw, Database, Square
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -183,6 +183,7 @@ export default function Chat() {
     const [isLoading, setIsLoading] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     const [failedMessageId, setFailedMessageId] = useState(null);
+    const abortRef = useRef(null);
     const [lastUserPayload, setLastUserPayload] = useState(null);
 
     // Save threads to localStorage — strip large data (base64 previews) to avoid quota
@@ -302,10 +303,14 @@ export default function Chat() {
                     });
             }
 
+            const controller = new AbortController();
+            abortRef.current = controller;
+
             const response = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(requestBody),
+                signal: controller.signal,
             });
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -324,6 +329,11 @@ export default function Chat() {
                     : t
             ));
         } catch (error) {
+            // If user clicked stop, don't show error
+            if (error.name === 'AbortError') {
+                console.log('[Chat] Request aborted by user');
+                return;
+            }
             console.error('Chat error:', error);
             const errId = Date.now() + 2;
             setFailedMessageId(errId);
@@ -347,6 +357,14 @@ export default function Chat() {
     }, [activeThreadId]);
 
     const handleSendMessage = (payload) => sendMessage(payload);
+
+    const handleStop = () => {
+        if (abortRef.current) {
+            abortRef.current.abort();
+            abortRef.current = null;
+        }
+        setIsLoading(false);
+    };
 
     const handleRetry = () => {
         if (!lastUserPayload) return;
@@ -658,8 +676,24 @@ export default function Chat() {
                                     <div style={{
                                         fontSize: '0.875rem', color: 'var(--text-secondary)',
                                         fontWeight: 600, marginBottom: '0.4rem',
+                                        display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     }}>
-                                        Atlas
+                                        Atlas is thinking...
+                                        <button
+                                            onClick={handleStop}
+                                            title="Stop generating"
+                                            style={{
+                                                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                                padding: '2px 8px', borderRadius: '4px',
+                                                border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+                                                cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+                                                color: 'var(--text-secondary)', transition: 'all 0.15s',
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--error)'; e.currentTarget.style.color = 'var(--error)'; }}
+                                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                                        >
+                                            <Square size={10} fill="currentColor" /> Stop
+                                        </button>
                                     </div>
                                     <TypingIndicator />
                                 </div>

@@ -79,13 +79,18 @@ function TypingIndicator() {
 }
 
 // ─── Empty state shown for brand-new threads (no messages yet) ───────────────
-function EmptyState({ onQuickPrompt }) {
-    const prompts = [
-        'Build me a modern portfolio website',
-        'Show me a summary of sales orders',
-        'Create an MCP server for PostgreSQL',
-        'Import a GitHub repo and edit it',
+function EmptyState() {
+    const capabilities = [
+        { icon: '🌐', title: 'Build Websites', desc: 'Generate React + Tailwind sites from a text prompt, then preview and deploy' },
+        { icon: '🎨', title: 'Figma to Code', desc: 'Paste a Figma URL to convert designs into working React components' },
+        { icon: '📊', title: 'Query Databases', desc: 'Connect BigQuery, Salesforce, or any MCP data source and ask questions in plain English' },
+        { icon: '🔧', title: 'Create MCP Servers', desc: 'Auto-generate MCP servers for PostgreSQL, REST APIs, or any data source' },
+        { icon: '🚀', title: 'Deploy Anywhere', desc: 'One-click deploy to Vercel or GitHub Pages, or update an existing repo' },
+        { icon: '📦', title: 'Import & Edit', desc: 'Pull code from any GitHub repo, make changes via chat, and redeploy' },
+        { icon: '🖼️', title: 'Image to UI', desc: 'Upload a screenshot or mockup and Atlas will build matching code' },
+        { icon: '🔌', title: 'Connect Services', desc: 'Add MCP connectors for BigQuery, Salesforce, Figma, and more via the Connectors panel' },
     ];
+
     return (
         <div style={{
             flex: 1,
@@ -93,62 +98,59 @@ function EmptyState({ onQuickPrompt }) {
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: '3rem 1rem',
-            gap: '2rem',
+            padding: '2.5rem 1.5rem',
+            gap: '1.5rem',
+            overflowY: 'auto',
         }}>
             <div style={{ textAlign: 'center' }}>
                 <div style={{
-                    width: '64px', height: '64px',
-                    borderRadius: '16px',
+                    width: '56px', height: '56px',
+                    borderRadius: '14px',
                     backgroundColor: 'var(--accent)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    margin: '0 auto 1rem',
+                    margin: '0 auto 0.75rem',
                     opacity: 0.9,
                 }}>
-                    <Database size={32} color="white" />
+                    <Database size={28} color="white" />
                 </div>
-                <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.4rem' }}>
-                    Ask Atlas anything
+                <h2 style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                    What can Atlas do?
                 </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', maxWidth: '360px' }}>
-                    Build websites, query data, convert Figma designs, create MCP servers, and deploy — all from chat.
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', maxWidth: '400px' }}>
+                    Type a message below to get started, or explore what's possible.
                 </p>
             </div>
 
             <div style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
-                gap: '0.75rem',
-                maxWidth: '480px',
+                gap: '0.6rem',
+                maxWidth: '560px',
                 width: '100%',
             }}>
-                {prompts.map((p, i) => (
-                    <button
+                {capabilities.map((cap, i) => (
+                    <div
                         key={i}
-                        onClick={() => onQuickPrompt(p)}
                         style={{
-                            padding: '0.75rem 1rem',
+                            padding: '0.75rem 0.85rem',
                             borderRadius: '10px',
                             border: '1px solid var(--border)',
                             backgroundColor: 'var(--bg-secondary)',
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                            fontSize: '0.85rem',
-                            color: 'var(--text-primary)',
-                            lineHeight: '1.4',
-                            transition: 'border-color 0.15s, background-color 0.15s',
-                        }}
-                        onMouseEnter={e => {
-                            e.currentTarget.style.borderColor = 'var(--accent)';
-                            e.currentTarget.style.backgroundColor = 'white';
-                        }}
-                        onMouseLeave={e => {
-                            e.currentTarget.style.borderColor = 'var(--border)';
-                            e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                            display: 'flex',
+                            gap: '0.6rem',
+                            alignItems: 'flex-start',
                         }}
                     >
-                        {p}
-                    </button>
+                        <span style={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, marginTop: '1px' }}>{cap.icon}</span>
+                        <div>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.15rem' }}>
+                                {cap.title}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                                {cap.desc}
+                            </div>
+                        </div>
+                    </div>
                 ))}
             </div>
         </div>
@@ -355,9 +357,7 @@ export default function Chat() {
         sendMessage(lastUserPayload);
     };
 
-    const handleQuickPrompt = (text) => {
-        sendMessage({ text });
-    };
+    // Quick prompt removed — EmptyState now shows capabilities list
 
     // Store parsed code files in thread state for context preservation
     const handleCodeParsed = useCallback((files, template, sourceMessage) => {
@@ -531,7 +531,7 @@ export default function Chat() {
 
                 {/* Messages or empty state */}
                 {showEmptyState ? (
-                    <EmptyState onQuickPrompt={handleQuickPrompt} />
+                    <EmptyState />
                 ) : (
                     <div
                         ref={messagesContainerRef}

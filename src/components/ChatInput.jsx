@@ -183,7 +183,7 @@ export default function ChatInput({ onSendMessage, disabled = false }) {
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept="image/*,.pdf,.txt,.csv,.json"
+                    accept="image/*"
                     onChange={handleFileSelect}
                     style={{ display: 'none' }}
                 />

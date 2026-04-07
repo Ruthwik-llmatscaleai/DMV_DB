@@ -34,7 +34,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
     const deployMenuRef = useRef(null);
     const pollRef = useRef(null);
 
-    if (!files || Object.keys(files).length === 0) return null;
+    const hasFiles = files && Object.keys(files).length > 0;
 
     // Light CSS sanitization only — JS/JSX is left untouched
     const sanitizeCode = (code, filename) => {
@@ -225,6 +225,8 @@ export default function SandpackPreview({ files, template = 'react' }) {
 
     const fileCount = Object.keys(files).length;
     const isDeploying = deployState === 'deploying' || deployState === 'polling';
+
+    if (!hasFiles) return null;
 
     const fullscreenStyle = expanded ? {
         position: 'fixed',

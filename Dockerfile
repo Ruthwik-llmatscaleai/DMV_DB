@@ -28,6 +28,7 @@ COPY --from=builder /app/dist ./dist
 COPY server.js .
 COPY mcp_registry.json .
 COPY api ./api
+COPY skills ./skills
 
 ENV PORT=8080
 EXPOSE ${PORT}

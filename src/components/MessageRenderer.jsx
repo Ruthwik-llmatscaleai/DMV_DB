@@ -42,10 +42,9 @@ function parseCodeBlocks(content) {
  * paragraph breaks, tables, and embedded Sandpack code previews.
  */
 export default function MessageRenderer({ content, role, onCodeParsed }) {
-    if (!content) return null;
-
-    // Step 1: Parse code blocks BEFORE any sanitization
-    const { files, template, remainingText } = parseCodeBlocks(content);
+    // Memoize parsing so we don't create new object refs every render
+    const parsed = React.useMemo(() => parseCodeBlocks(content || ''), [content]);
+    const { files, template, remainingText } = parsed;
 
     // Notify parent of parsed code (for codeSnapshot tracking)
     React.useEffect(() => {
@@ -53,6 +52,8 @@ export default function MessageRenderer({ content, role, onCodeParsed }) {
             onCodeParsed(files, template);
         }
     }, [files, onCodeParsed, template]);
+
+    if (!content) return null;
 
     // Step 2: Sanitize ONLY the remaining text (not the code)
     const sanitised = remainingText

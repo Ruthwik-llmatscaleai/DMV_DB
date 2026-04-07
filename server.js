@@ -87,7 +87,10 @@ async function autoConnectFromRegistry() {
             const connectors = JSON.parse(data);
             console.log(`[System] Loading ${connectors.length} MCPs from registry...`);
             for (const { name, url } of connectors) {
-                await connectToMcp(url, name);
+                const exists = Array.from(activeConnectors.values()).find(c => c.name === name);
+                if (!exists) {
+                    await connectToMcp(url, name);
+                }
             }
         }
     } catch (err) {
@@ -198,6 +201,7 @@ function buildTransportFromUrl(rawUrl) {
 
 // GET /api/connectors
 app.get('/api/connectors', async (req, res) => {
+    try {
     const list = [];
     for (const [id, c] of activeConnectors.entries()) {
         let tools = [];
@@ -212,6 +216,10 @@ app.get('/api/connectors', async (req, res) => {
         list.push({ id, name: c.name, status: c.status, tools });
     }
     res.json(list);
+    } catch (e) {
+        console.error('[API] /connectors error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // POST /api/connectors

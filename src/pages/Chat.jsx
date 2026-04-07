@@ -180,11 +180,33 @@ export default function Chat() {
     const [failedMessageId, setFailedMessageId] = useState(null);
     const [lastUserPayload, setLastUserPayload] = useState(null);
 
-    // Save threads to localStorage whenever they change
+    // Save threads to localStorage — strip large data (base64 previews) to avoid quota
     useEffect(() => {
         try {
-            localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
-        } catch { /* quota exceeded — ignore */ }
+            const stripped = threads.map(t => ({
+                ...t,
+                messages: t.messages.map(m => {
+                    if (m.attachmentPreviews?.length > 0) {
+                        const { attachmentPreviews, ...rest } = m;
+                        return rest;
+                    }
+                    return m;
+                }),
+            }));
+            localStorage.setItem(THREADS_KEY, JSON.stringify(stripped));
+        } catch {
+            // Quota exceeded — trim older threads and retry
+            try {
+                const trimmed = threads.slice(0, 10).map(t => ({
+                    ...t,
+                    messages: t.messages.slice(-50).map(m => {
+                        const { attachmentPreviews, ...rest } = m;
+                        return rest;
+                    }),
+                }));
+                localStorage.setItem(THREADS_KEY, JSON.stringify(trimmed));
+            } catch { /* truly full */ }
+        }
     }, [threads]);
 
     const activeThread = threads.find(t => t.id === activeThreadId) || threads[0];

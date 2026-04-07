@@ -33,40 +33,49 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 /**
  * Connects to an MCP URL and adds it to the active pool.
  */
-async function connectToMcp(url, displayName) {
+async function connectToMcp(url, displayName, retries = 3) {
     const id = generateId();
-    try {
-        const transport = buildTransportFromUrl(url);
-        const client = new Client(
-            { name: 'Atlas-AI-Client', version: '1.0.0' },
-            { capabilities: { tools: {} } }
-        );
-        
-        activeConnectors.set(id, { 
-            name: displayName, 
-            client, 
-            transport, 
-            status: 'connecting' 
-        });
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            const transport = buildTransportFromUrl(url);
+            const client = new Client(
+                { name: 'Atlas-AI-Client', version: '1.0.0' },
+                { capabilities: { tools: {} } }
+            );
 
-        const timer = setTimeout(() => {
-            if (activeConnectors.get(id)?.status === 'connecting')
-                console.error(`[System] Timeout connecting to ${displayName}`);
-        }, 15_000);
+            activeConnectors.set(id, {
+                name: displayName,
+                client,
+                transport,
+                status: 'connecting'
+            });
 
-        await client.connect(transport);
-        clearTimeout(timer);
+            const timer = setTimeout(() => {
+                if (activeConnectors.get(id)?.status === 'connecting')
+                    console.error(`[System] Timeout connecting to ${displayName}`);
+            }, 15_000);
 
-        activeConnectors.get(id).status = 'connected';
-        console.log(`[System] ✅ Successfully connected to ${displayName}!`);
-        return true;
-    } catch (error) {
-        console.error(`[System] ❌ Failed to connect to ${displayName}:`, error.message);
-        if (activeConnectors.has(id)) {
-             activeConnectors.get(id).status = 'error';
+            await client.connect(transport);
+            clearTimeout(timer);
+
+            activeConnectors.get(id).status = 'connected';
+            console.log(`[System] ✅ Successfully connected to ${displayName}!`);
+            return true;
+        } catch (error) {
+            console.error(`[System] ❌ Attempt ${attempt}/${retries} failed for ${displayName}:`, error.message);
+            if (attempt < retries) {
+                console.log(`[System] Retrying in 5s...`);
+                await new Promise(r => setTimeout(r, 5000));
+                activeConnectors.delete(id);
+                continue;
+            }
+            if (activeConnectors.has(id)) {
+                activeConnectors.get(id).status = 'error';
+            }
+            return false;
         }
-        return false;
     }
+    return false;
 }
 
 /**

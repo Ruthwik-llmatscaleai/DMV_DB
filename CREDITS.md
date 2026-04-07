@@ -53,6 +53,12 @@ DMV Atlas is built on top of many excellent open-source projects, APIs, and serv
 | [GitHub Pages](https://pages.github.com/) | Proprietary | Static site deployment |
 | [zrok](https://github.com/openziti/zrok) | Apache 2.0 | Secure tunneling |
 
+## Design
+
+| Project | License | Usage |
+|---------|---------|-------|
+| [Figma REST API](https://www.figma.com/developers/api) | Proprietary | Design file fetching for Figma-to-code conversion |
+
 ## Utilities
 
 | Project | License | Usage |

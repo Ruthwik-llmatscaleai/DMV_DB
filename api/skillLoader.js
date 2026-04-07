@@ -66,6 +66,11 @@ export function matchSkill(userMessage, skills) {
     if (!skills || skills.length === 0) return null;
     const text = userMessage.toLowerCase();
 
+    // Figma queries
+    if (text.match(/\bfigma\b/) || text.match(/figma\.com\//)) {
+        return skills.find(s => s.name === 'figma-to-code') || null;
+    }
+
     // MCP-related queries
     if (text.match(/\b(mcp|model context protocol)\b/) && text.match(/\b(create|build|make|generate|connect|server|setup)\b/)) {
         return skills.find(s => s.name === 'mcp-builder') || null;

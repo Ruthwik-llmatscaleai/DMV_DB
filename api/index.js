@@ -10,6 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { scaffoldForVercel, scaffoldForGitHub } from './scaffold.js';
 import { loadSkills, matchSkill, loadSkillReferences } from './skillLoader.js';
+import { extractFigmaFileKey, extractNodeId, fetchFigmaFile, fetchFigmaStyles, figmaToContext, isFigmaRequest } from './figma.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -722,6 +723,79 @@ app.post('/api/chat', async (req, res) => {
     try {
         const isMcpReq = isMcpCreationRequest(messages);
         const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
+        const lastUserText = getLastUserMessage(messages);
+        const figmaReq = isFigmaRequest(lastUserText);
+
+        // ═══════════════════════════════════════════════════
+        // FIGMA → CODE PATH
+        // ═══════════════════════════════════════════════════
+        if (figmaReq) {
+            console.log('[Chat] 🎨 Figma design request detected');
+            const FIGMA_API_KEY = process.env.FIGMA_API_KEY;
+            if (!FIGMA_API_KEY) {
+                return res.json({ role: 'assistant', content: 'Figma integration requires a `FIGMA_API_KEY` in the environment variables. You can get one from **Figma → Settings → Personal Access Tokens**.' });
+            }
+
+            const fileKey = extractFigmaFileKey(lastUserText);
+            if (!fileKey) {
+                return res.json({ role: 'assistant', content: 'I detected a Figma request but couldn\'t find a Figma file URL. Please paste a Figma link like:\n\n`https://www.figma.com/design/ABC123/MyDesign`' });
+            }
+
+            try {
+                const nodeId = extractNodeId(lastUserText);
+                console.log(`[Figma] Fetching file ${fileKey}${nodeId ? ` node ${nodeId}` : ''}...`);
+
+                const [figmaData, styles] = await Promise.all([
+                    fetchFigmaFile(fileKey, FIGMA_API_KEY, nodeId),
+                    fetchFigmaStyles(fileKey, FIGMA_API_KEY),
+                ]);
+
+                const designContext = figmaToContext(figmaData, styles);
+                console.log(`[Figma] Design context: ${designContext.length} chars`);
+
+                const figmaPrompt = `${CODE_GEN_SYSTEM_PROMPT}
+
+## Figma Design Conversion
+You are converting a Figma design into working React + Tailwind CSS code.
+Match the design as closely as possible:
+- Use the exact colors, fonts, spacing, and layout from the design data
+- Use Tailwind classes that match the design dimensions and styles
+- Preserve the component hierarchy from the Figma layers
+- Use placeholder images for any image nodes
+- Make the output responsive
+
+${designContext}`;
+
+                const figmaMessages = [
+                    { role: 'system', content: figmaPrompt },
+                    ...messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+                ];
+
+                let msg = await callGemini(figmaMessages, 16384);
+                if (!msg) {
+                    const groqBody = {
+                        model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+                        messages: figmaMessages.map(m => ({ ...m, content: m.content ?? '' })),
+                        temperature: 0.3,
+                        max_tokens: 8192,
+                    };
+                    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+                        body: JSON.stringify(groqBody),
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.choices?.length) msg = data.choices[0].message;
+                    }
+                }
+                if (!msg) return res.json({ role: 'assistant', content: "I fetched the Figma design but couldn't generate code. Please try again." });
+                return res.json({ role: 'assistant', content: msg.content });
+            } catch (e) {
+                console.error('[Figma] Error:', e.message);
+                return res.json({ role: 'assistant', content: `I couldn't fetch the Figma file: ${e.message}\n\nMake sure the file is accessible and your Figma API key has the right permissions.` });
+            }
+        }
 
         // ═══════════════════════════════════════════════════
         // MCP SERVER CREATION PATH

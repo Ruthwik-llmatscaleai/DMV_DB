@@ -379,7 +379,7 @@ When asked to build, create, or generate a website, app, landing page, dashboard
 
 2. Always include App.jsx as the main entry point for React projects.
 3. Use modern React with hooks and functional components.
-4. Keep each file under 100 lines to stay within output limits. Prefer fewer, larger components over many small files. Put everything in App.jsx if possible, or use at most 2-3 files total.
+4. Keep each file under 200 lines. You may create multiple component files (Navbar.jsx, Footer.jsx, etc.) as needed for clean code structure.
 5. After the code blocks, add a brief 2-3 sentence description of what you built and what the user can modify.
 6. For complex requests, build the core layout first and tell the user they can ask to modify specific sections.
 7. When modifying existing code, output ALL files again with changes applied (not just the diff).
@@ -716,8 +716,16 @@ app.post('/api/chat', async (req, res) => {
     }
 
     try {
+        // Heuristic: If they mention specific integrations, they probably want data, not code generation.
+        const msgText = (getLastUserMessage(messages)?.content || '').toLowerCase();
+        const isDataIntent = /\b(salesforce|bigquery|tickets|project|query|database|fetch|find)\b/i.test(msgText);
+        
+        const isCodeGenReq = isCodeGenerationRequest(messages);
+        const hasCodeSnapshot = (codeSnapshot && Object.keys(codeSnapshot).length > 0);
+        
+        // Only force Code Gen if there's an explicit request OR (it has a snapshot AND NO explicit data intent)
+        const isCodeGen = isCodeGenReq || (hasCodeSnapshot && !isDataIntent);
         const isMcpReq = isMcpCreationRequest(messages);
-        const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
         const lastUserText = getLastUserMessage(messages);
         const lastUserTextRaw = getLastUserMessageRaw(messages);
         const figmaReq = isFigmaRequest(lastUserText);

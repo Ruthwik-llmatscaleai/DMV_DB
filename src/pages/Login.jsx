@@ -11,7 +11,7 @@ export default function Login() {
   const handleLogin = (e) => {
     e.preventDefault();
     if (username === 'admin' && password === 'admin') {
-      sessionStorage.setItem('dmv_logged_in', 'true');
+      sessionStorage.setItem('atlas_logged_in', 'true');
       navigate('/chat');
     } else {
       setError('Invalid credentials. Please use admin/admin.');
@@ -25,7 +25,7 @@ export default function Login() {
         {!logoError ? (
           <img
             src="/dmv-logo.svg"
-            alt="California DMV Logo"
+            alt="Atlas AI Logo"
             style={{
               width: '240px',
               height: 'auto',
@@ -55,7 +55,7 @@ export default function Login() {
               justifyContent: 'center',
             }}>
               <span style={{ fontSize: '2rem', fontWeight: 900, letterSpacing: '-1px', color: 'white' }}>CA</span>
-              <span style={{ fontSize: '1.3rem', fontWeight: 900, letterSpacing: '4px', color: 'white' }}>DMV</span>
+              <span style={{ fontSize: '1.3rem', fontWeight: 900, letterSpacing: '4px', color: 'white' }}>AI</span>
             </div>
           </div>
         )}
@@ -68,7 +68,7 @@ export default function Login() {
           lineHeight: '1.2',
           color: 'white',
         }}>
-          Welcome to the future of administration
+          Welcome to Atlas AI
         </h1>
         <p style={{
           fontSize: '1.15rem',
@@ -78,8 +78,8 @@ export default function Login() {
           lineHeight: '1.7',
           color: 'white',
         }}>
-          Connect seamlessly to internal tools and databases. The modern ecosystem
-          for vehicle records and intelligent document processing.
+          Your AI-powered platform for data, design, and deployment. Build websites,
+          query databases, and create MCP servers — all from one chat.
         </p>
 
         {/* Decorative dots */}
@@ -154,7 +154,7 @@ export default function Login() {
             fontSize: '0.8rem',
             color: 'var(--text-muted)',
           }}>
-            California Department of Motor Vehicles · Secure Portal
+            LLMAtScale.ai · AI Platform
           </p>
         </div>
       </div>

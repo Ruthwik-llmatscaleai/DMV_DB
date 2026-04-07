@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom';
 const WELCOME_MESSAGE = {
     id: 1,
     role: 'assistant',
-    content: "Hello! I'm Atlas, your DMV administrative assistant. I can help you look up vehicle records, check registration information, run data summaries, and much more.\n\nConnect a database via the **Connectors** button above, then ask me anything about your data.",
+    content: "Hello! I'm Atlas, your AI-powered assistant by LLMAtScale.ai. I can help you:\n\n- **Query databases** — BigQuery, Salesforce, or any connected data source\n- **Build websites** — Generate React + Tailwind sites from a text prompt or Figma design\n- **Deploy** — One-click deploy to Vercel or GitHub Pages\n- **Create MCP servers** — Auto-generate connectors for any database or API\n- **Import & edit** — Pull code from GitHub, edit, and redeploy\n\nConnect a data source via **Connectors**, or just ask me to build something!",
     timestamp: Date.now(),
 };
 
@@ -81,10 +81,10 @@ function TypingIndicator() {
 // ─── Empty state shown for brand-new threads (no messages yet) ───────────────
 function EmptyState({ onQuickPrompt }) {
     const prompts = [
-        'What datasets are available?',
-        'Show me a summary of vehicle registrations',
-        'How many records are in the database?',
-        'List the available tables',
+        'Build me a modern portfolio website',
+        'Show me a summary of sales orders',
+        'Create an MCP server for PostgreSQL',
+        'Import a GitHub repo and edit it',
     ];
     return (
         <div style={{
@@ -111,7 +111,7 @@ function EmptyState({ onQuickPrompt }) {
                     Ask Atlas anything
                 </h2>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', maxWidth: '360px' }}>
-                    Connect a database connector, then ask a question to explore your data.
+                    Build websites, query data, convert Figma designs, create MCP servers, and deploy — all from chat.
                 </p>
             </div>
 
@@ -161,7 +161,7 @@ export default function Chat() {
     const messagesEndRef = useRef(null);
     const messagesContainerRef = useRef(null);
 
-    const THREADS_KEY = 'dmv_chat_threads';
+    const THREADS_KEY = 'atlas_chat_threads';
     const loadSavedThreads = () => {
         try {
             const saved = JSON.parse(localStorage.getItem(THREADS_KEY));
@@ -420,7 +420,7 @@ export default function Chat() {
                 <div className="sidebar-header">
                     <div className="flex items-center gap-2 font-bold text-lg" style={{ color: 'var(--accent)' }}>
                         <ShieldCheck size={22} />
-                        <span>DMV Atlas</span>
+                        <span>Atlas AI</span>
                     </div>
                 </div>
 
@@ -505,7 +505,7 @@ export default function Chat() {
                     <button
                         className="btn btn-ghost w-full justify-start gap-2"
                         style={{ padding: '0.5rem', fontSize: '0.875rem' }}
-                        onClick={() => { sessionStorage.removeItem('dmv_logged_in'); navigate('/login'); }}
+                        onClick={() => { sessionStorage.removeItem('atlas_logged_in'); navigate('/login'); }}
                     >
                         <LogOut size={16} /> Log out
                     </button>

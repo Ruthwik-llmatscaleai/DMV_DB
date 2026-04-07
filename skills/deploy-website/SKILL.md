@@ -1,6 +1,6 @@
 ---
 name: deploy-website
-description: Guide for deploying generated websites to Vercel or GitHub Pages from the DMV Atlas chatbot. Use when the user wants to deploy, publish, or go live with a generated website.
+description: Guide for deploying generated websites to Vercel or GitHub Pages from the Atlas AI chatbot. Use when the user wants to deploy, publish, or go live with a generated website.
 ---
 
 # Website Deployment Skill

@@ -48,9 +48,9 @@ function reactIndexHtml(rawName) {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${name}</title>
-  <meta name="description" content="${name} — Built with DMV Atlas">
+  <meta name="description" content="${name} — Built with Atlas AI">
   <meta property="og:title" content="${name}">
-  <meta property="og:description" content="Built with DMV Atlas">
+  <meta property="og:description" content="Built with Atlas AI">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">

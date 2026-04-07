@@ -38,7 +38,7 @@
   pointer-events: none;
 }
 
-.dmv-logo-placeholder {
+.logo-placeholder {
   width: 120px;
   height: 120px;
   background-color: white;
@@ -455,11 +455,38 @@
 }
 
 .sandpack-file-count {
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  background: rgba(137, 180, 250, 0.1);
-  padding: 0.1rem 0.45rem;
+  font-size: 0.65rem;
+  color: var(--sandpack-accent);
+  background: rgba(59, 130, 246, 0.08);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sandpack-viewport-group {
+  display: flex;
+  gap: 1px;
+  margin: 0 4px;
+  padding: 0 4px;
+  border-left: 1px solid var(--sandpack-border);
+  border-right: 1px solid var(--sandpack-border);
+}
+
+.sandpack-action-btn.active {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--sandpack-accent);
   border-radius: 4px;
+}
+
+.sandpack-viewport-label {
+  text-align: center;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+  background: #e5e5e2;
+  font-weight: 500;
+  letter-spacing: 0.05em;
 }
 
 .sandpack-actions {

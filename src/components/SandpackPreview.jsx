@@ -266,31 +266,21 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
                     </button>
 
                     {/* Responsive viewport toggles */}
-                    <div style={{ display: 'flex', gap: '1px', marginLeft: '4px', marginRight: '4px', borderLeft: '1px solid var(--sandpack-border)', borderRight: '1px solid var(--sandpack-border)', paddingLeft: '4px', paddingRight: '4px' }}>
-                        <button
-                            className="sandpack-action-btn"
-                            onClick={() => setViewportWidth('375px')}
-                            title="Mobile (375px)"
-                            style={{ color: viewportWidth === '375px' ? 'var(--sandpack-accent)' : undefined }}
-                        >
-                            <Smartphone size={13} />
-                        </button>
-                        <button
-                            className="sandpack-action-btn"
-                            onClick={() => setViewportWidth('768px')}
-                            title="Tablet (768px)"
-                            style={{ color: viewportWidth === '768px' ? 'var(--sandpack-accent)' : undefined }}
-                        >
-                            <Tablet size={13} />
-                        </button>
-                        <button
-                            className="sandpack-action-btn"
-                            onClick={() => setViewportWidth('100%')}
-                            title="Desktop (full width)"
-                            style={{ color: viewportWidth === '100%' ? 'var(--sandpack-accent)' : undefined }}
-                        >
-                            <Monitor size={13} />
-                        </button>
+                    <div className="sandpack-viewport-group">
+                        {[
+                            { w: '375px', icon: <Smartphone size={13} />, label: 'Mobile' },
+                            { w: '768px', icon: <Tablet size={13} />, label: 'Tablet' },
+                            { w: '100%', icon: <Monitor size={13} />, label: 'Desktop' },
+                        ].map(v => (
+                            <button
+                                key={v.w}
+                                className={`sandpack-action-btn ${viewportWidth === v.w ? 'active' : ''}`}
+                                onClick={() => setViewportWidth(v.w)}
+                                title={`${v.label} (${v.w})`}
+                            >
+                                {v.icon}
+                            </button>
+                        ))}
                     </div>
 
                     <button
@@ -449,6 +439,9 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
                     />
                 </Suspense>
             </div>
+            {viewportWidth !== '100%' && (
+                <div className="sandpack-viewport-label">{viewportWidth}</div>
+            )}
             </div>
         </div>
     );

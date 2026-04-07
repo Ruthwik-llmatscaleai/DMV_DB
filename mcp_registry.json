@@ -1,6 +1,6 @@
 [
   {
-    "name": "DMV Production Database",
+    "name": "BigQuery (LLMAtScale.ai)",
     "url": "https://dmv-mcp-server-nyz3kpmzjq-uc.a.run.app/mcp",
     "type": "mcp"
   }

@@ -1,6 +1,6 @@
 # Credits & Acknowledgments
 
-DMV Atlas is built on top of many excellent open-source projects, APIs, and services. We gratefully acknowledge the following:
+Atlas AI is built on top of many excellent open-source projects, APIs, and services. We gratefully acknowledge the following:
 
 ## Core Frameworks
 

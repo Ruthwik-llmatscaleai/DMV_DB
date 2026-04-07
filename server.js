@@ -27,7 +27,7 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type'],
 }));
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
 
 // -----------------------------------------------------------------------
 // State
@@ -449,7 +449,7 @@ function isCodeGenerationRequest(messages) {
 // -----------------------------------------------------------------------
 // Gemini API Caller
 // -----------------------------------------------------------------------
-async function callGemini(messages, maxTokens = 16384) {
+async function callGemini(messages, maxTokens = 16384, images = []) {
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
         console.warn('[Gemini] No API key configured, falling back to Groq');
@@ -462,6 +462,22 @@ async function callGemini(messages, maxTokens = 16384) {
                 role: m.role === 'assistant' ? 'model' : 'user',
                 parts: [{ text: m.content || '' }]
             }));
+
+        // Add images to the last user message
+        if (images.length > 0 && contents.length > 0) {
+            const lastUser = [...contents].reverse().find(c => c.role === 'user');
+            if (lastUser) {
+                for (const img of images) {
+                    lastUser.parts.push({
+                        inline_data: {
+                            mime_type: img.mimeType,
+                            data: img.data,
+                        }
+                    });
+                }
+            }
+        }
+
         const systemInstruction = messages.find(m => m.role === 'system');
         const body = {
             contents,
@@ -656,7 +672,7 @@ async function executeToolCalls(toolCalls, toolToConnector, messagesToLlm) {
 // POST /api/chat
 // -----------------------------------------------------------------------
 app.post('/api/chat', async (req, res) => {
-    const { messages, codeSnapshot } = req.body;
+    const { messages, codeSnapshot, images } = req.body;
     const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY;
 
     if (!GROQ_API_KEY || GROQ_API_KEY === 'your_grok_api_key_here') {
@@ -832,7 +848,7 @@ ${skillContent}${refContent}`;
                 { role: 'system', content: CODE_GEN_SYSTEM_PROMPT + skillEnhancement },
                 ...codeMessages,
             ];
-            let msg = await callGemini(geminiMessages, 16384);
+            let msg = await callGemini(geminiMessages, 16384, images || []);
             if (!msg) {
                 console.log('[Chat] Gemini unavailable, falling back to Groq');
                 const groqCodeMessages = geminiMessages.map(m => ({ ...m, content: m.content ?? '' }));

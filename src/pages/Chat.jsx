@@ -213,17 +213,22 @@ export default function Chat() {
     }, []);
 
     // Core send logic, extracted so retry can reuse it
-    const sendMessage = useCallback(async ({ text }) => {
-        if (!text.trim()) return;
+    const sendMessage = useCallback(async ({ text, attachments }) => {
+        if (!text?.trim() && !attachments?.length) return;
 
         const thread = activeThreadRef.current;
-        const fullPrompt = text;
         const now = Date.now();
+
+        // Build file names list for display
+        const fileNames = attachments?.map(a => a.name) || [];
+
         const userMessage = {
             id: now,
             role: 'user',
-            content: fullPrompt,
-            displayContent: text,
+            content: text || '(image attached)',
+            displayContent: text || '(image attached)',
+            files: fileNames.length > 0 ? fileNames : undefined,
+            attachmentPreviews: attachments?.filter(a => a.preview).map(a => a.preview) || [],
             timestamp: now,
         };
 
@@ -233,7 +238,7 @@ export default function Chat() {
             ? text.slice(0, 40) + (text.length > 40 ? '…' : '')
             : thread.title;
 
-        setLastUserPayload({ text });
+        setLastUserPayload({ text, attachments });
         setFailedMessageId(null);
 
         setThreads(prev => prev.map(t =>
@@ -254,6 +259,16 @@ export default function Chat() {
             const requestBody = { messages: contextToSend };
             if (thread.codeSnapshot && Object.keys(thread.codeSnapshot).length > 0) {
                 requestBody.codeSnapshot = thread.codeSnapshot;
+            }
+
+            // Include image attachments as base64 for multimodal LLM
+            if (attachments?.length > 0) {
+                requestBody.images = attachments
+                    .filter(a => a.type?.startsWith('image/'))
+                    .map(a => ({
+                        data: a.dataUrl.split(',')[1], // strip data:image/...;base64, prefix
+                        mimeType: a.type,
+                    }));
             }
 
             const response = await fetch(`${API_URL}/chat`, {
@@ -539,6 +554,26 @@ export default function Chat() {
                                             >
                                                 <RefreshCw size={12} /> Retry
                                             </button>
+                                        </div>
+                                    )}
+
+                                    {/* Image previews in user messages */}
+                                    {msg.attachmentPreviews?.length > 0 && (
+                                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                                            {msg.attachmentPreviews.map((src, i) => (
+                                                <img
+                                                    key={i}
+                                                    src={src}
+                                                    alt="Attached"
+                                                    style={{
+                                                        maxWidth: '200px',
+                                                        maxHeight: '150px',
+                                                        borderRadius: '8px',
+                                                        border: '1px solid var(--border)',
+                                                        objectFit: 'cover',
+                                                    }}
+                                                />
+                                            ))}
                                         </div>
                                     )}
 

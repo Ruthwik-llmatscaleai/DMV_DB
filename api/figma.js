@@ -32,20 +32,38 @@ export function extractNodeId(input) {
  * Fetches a Figma file's design data and returns a simplified summary.
  */
 export async function fetchFigmaFile(fileKey, apiKey, nodeId) {
+    const headers = { 'X-Figma-Token': apiKey };
     const baseUrl = `https://api.figma.com/v1/files/${fileKey}`;
-    const url = nodeId ? `${baseUrl}/nodes?ids=${encodeURIComponent(nodeId)}` : baseUrl;
 
-    const response = await fetch(url, {
-        headers: { 'X-Figma-Token': apiKey },
-    });
+    // If node-id specified, try fetching that specific node first
+    if (nodeId) {
+        // Figma API uses : separator, URLs use -
+        const normalizedId = nodeId.replace('-', ':');
+        const nodeUrl = `${baseUrl}/nodes?ids=${encodeURIComponent(normalizedId)}&depth=4`;
+        const nodeRes = await fetch(nodeUrl, { headers });
+
+        if (nodeRes.ok) {
+            const nodeData = await nodeRes.json();
+            // Check if the node has useful content (children)
+            const firstNode = Object.values(nodeData.nodes || {})[0];
+            if (firstNode?.document?.children?.length > 0) {
+                return nodeData;
+            }
+            // Node is a leaf — fall through to fetch full file
+            console.log(`[Figma] Node ${nodeId} is a leaf element, fetching full file instead`);
+        }
+    }
+
+    // Fetch full file with limited depth for performance
+    const url = `${baseUrl}?depth=3`;
+    const response = await fetch(url, { headers });
 
     if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error(err.message || `Figma API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data;
+    return await response.json();
 }
 
 /**
@@ -144,9 +162,6 @@ function simplifyNode(node, depth = 0) {
  * suitable for injecting into an LLM prompt.
  */
 export function figmaToContext(figmaData, styles) {
-    const doc = figmaData.document || figmaData;
-    const pages = doc.children || [];
-
     let context = '## Figma Design Context\n\n';
 
     // File info
@@ -168,17 +183,43 @@ export function figmaToContext(figmaData, styles) {
         }
     }
 
-    // Simplified page structure
-    context += '\n### Page Structure\n';
-    for (const page of pages.slice(0, 3)) { // Max 3 pages
-        context += `\n#### Page: ${page.name}\n`;
-        if (page.children) {
-            for (const frame of page.children.slice(0, 5)) { // Max 5 top-level frames
-                const simplified = simplifyNode(frame);
-                if (simplified) {
-                    context += '```json\n' + JSON.stringify(simplified, null, 2).slice(0, 3000) + '\n```\n';
+    // Handle both full file response (has .document) and nodes response (has .nodes)
+    let nodesToProcess = [];
+
+    if (figmaData.nodes) {
+        // Nodes API response: { nodes: { "39:1427": { document: {...} } } }
+        for (const [nodeId, nodeData] of Object.entries(figmaData.nodes)) {
+            const doc = nodeData.document;
+            if (doc) {
+                if (doc.children?.length > 0) {
+                    // It's a container (frame, page, etc.) — process its children
+                    nodesToProcess.push(...doc.children.slice(0, 10));
+                } else {
+                    // It's a leaf node — process it directly
+                    nodesToProcess.push(doc);
                 }
             }
+        }
+    } else if (figmaData.document) {
+        // Full file response
+        const pages = figmaData.document.children || [];
+        for (const page of pages.slice(0, 3)) {
+            if (page.children) {
+                nodesToProcess.push(...page.children.slice(0, 5));
+            }
+        }
+    }
+
+    // Simplified structure
+    context += '\n### Design Structure\n';
+    if (nodesToProcess.length === 0) {
+        context += '\nNo detailed structure available for this selection.\n';
+    }
+    for (const node of nodesToProcess) {
+        const simplified = simplifyNode(node);
+        if (simplified) {
+            context += `\n#### ${node.name || 'Element'}\n`;
+            context += '```json\n' + JSON.stringify(simplified, null, 2).slice(0, 3000) + '\n```\n';
         }
     }
 

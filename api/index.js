@@ -471,6 +471,11 @@ function getLastUserMessage(messages) {
     return msg ? (msg.content || '').toLowerCase() : '';
 }
 
+function getLastUserMessageRaw(messages) {
+    const msg = [...messages].reverse().find(m => m.role === 'user');
+    return msg ? (msg.content || '') : '';
+}
+
 function isCodeGenerationRequest(messages) {
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
     if (!lastUserMsg) return false;
@@ -740,6 +745,7 @@ app.post('/api/chat', async (req, res) => {
         const isMcpReq = isMcpCreationRequest(messages);
         const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
         const lastUserText = getLastUserMessage(messages);
+        const lastUserTextRaw = getLastUserMessageRaw(messages);
         const figmaReq = isFigmaRequest(lastUserText);
         const ghImportReq = isGitHubImportRequest(lastUserText);
 
@@ -748,7 +754,7 @@ app.post('/api/chat', async (req, res) => {
         // ═══════════════════════════════════════════════════
         if (ghImportReq) {
             console.log('[Chat] 📦 GitHub import request detected');
-            const parsed = parseGitHubUrl(lastUserText);
+            const parsed = parseGitHubUrl(lastUserTextRaw);
             if (!parsed) {
                 return res.json({ role: 'assistant', content: 'I couldn\'t parse the GitHub URL. Please paste a link like:\n\n`https://github.com/owner/repo`' });
             }
@@ -785,13 +791,13 @@ app.post('/api/chat', async (req, res) => {
                 return res.json({ role: 'assistant', content: 'Figma integration requires a `FIGMA_API_KEY` in the environment variables. You can get one from **Figma → Settings → Personal Access Tokens**.' });
             }
 
-            const fileKey = extractFigmaFileKey(lastUserText);
+            const fileKey = extractFigmaFileKey(lastUserTextRaw);
             if (!fileKey) {
                 return res.json({ role: 'assistant', content: 'I detected a Figma request but couldn\'t find a Figma file URL. Please paste a Figma link like:\n\n`https://www.figma.com/design/ABC123/MyDesign`' });
             }
 
             try {
-                const nodeId = extractNodeId(lastUserText);
+                const nodeId = extractNodeId(lastUserTextRaw);
                 console.log(`[Figma] Fetching file ${fileKey}${nodeId ? ` node ${nodeId}` : ''}...`);
 
                 const [figmaData, styles] = await Promise.all([

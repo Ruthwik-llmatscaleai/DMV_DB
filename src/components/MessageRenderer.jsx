@@ -19,15 +19,28 @@ function parseCodeBlocks(content) {
         files[key] = code;
     }
 
+    // Handle truncated file blocks (LLM hit token limit before closing </file>)
+    // Match <file name="...">code without a closing tag at the end of content
+    const truncatedRegex = /<file\s+name=["']([^"']+)["']>\s*([\s\S]+)$/;
+    const stripped = content.replace(new RegExp(FILE_BLOCK_REGEX.source, 'g'), '');
+    const truncMatch = truncatedRegex.exec(stripped);
+    if (truncMatch) {
+        const filename = truncMatch[1];
+        const code = truncMatch[2].trim();
+        const key = filename.startsWith('/') ? filename : `/${filename}`;
+        files[key] = code;
+    }
+
     // Detect template type
     const templateMatch = TEMPLATE_REGEX.exec(content);
     const template = templateMatch ? templateMatch[1] : 'react';
 
-    // Strip file blocks and template tag from remaining content
-    const remainingText = content
+    // Strip file blocks (complete and truncated) and template tag
+    let remainingText = content
         .replace(new RegExp(FILE_BLOCK_REGEX.source, 'g'), '')
-        .replace(TEMPLATE_REGEX, '')
-        .trim();
+        .replace(TEMPLATE_REGEX, '');
+    // Also strip truncated file blocks
+    remainingText = remainingText.replace(/<file\s+name=["'][^"']+["']>[\s\S]*$/, '').trim();
 
     return {
         files: Object.keys(files).length > 0 ? files : null,

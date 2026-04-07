@@ -78,6 +78,38 @@ function TypingIndicator() {
     );
 }
 
+// ─── Thinking status — cycles through what Atlas is doing ────────────────────
+function ThinkingStatus() {
+    const steps = [
+        'Understanding your request...',
+        'Analyzing context...',
+        'Generating response...',
+        'Processing with AI...',
+    ];
+    const [stepIdx, setStepIdx] = useState(0);
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setStepIdx(prev => (prev + 1) % steps.length);
+        }, 3000);
+        return () => clearInterval(interval);
+    }, []);
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{
+                width: '12px', height: '12px', borderRadius: '50%',
+                border: '2px solid var(--border)',
+                borderTopColor: 'var(--accent)',
+                animation: 'spin 0.8s linear infinite',
+            }} />
+            <span style={{ transition: 'opacity 0.3s', fontSize: '0.82rem' }}>
+                {steps[stepIdx]}
+            </span>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+    );
+}
+
 // ─── Empty state shown for brand-new threads (no messages yet) ───────────────
 function EmptyState() {
     const capabilities = [
@@ -674,11 +706,11 @@ export default function Chat() {
                                 </div>
                                 <div className="message-content">
                                     <div style={{
-                                        fontSize: '0.875rem', color: 'var(--text-secondary)',
-                                        fontWeight: 600, marginBottom: '0.4rem',
+                                        fontSize: '0.82rem', color: 'var(--text-secondary)',
+                                        fontWeight: 500, marginBottom: '0.5rem',
                                         display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     }}>
-                                        Atlas is thinking...
+                                        <ThinkingStatus />
                                         <button
                                             onClick={handleStop}
                                             title="Stop generating"
@@ -688,6 +720,7 @@ export default function Chat() {
                                                 border: '1px solid var(--border)', background: 'var(--bg-secondary)',
                                                 cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
                                                 color: 'var(--text-secondary)', transition: 'all 0.15s',
+                                                marginLeft: 'auto',
                                             }}
                                             onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--error)'; e.currentTarget.style.color = 'var(--error)'; }}
                                             onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
@@ -695,7 +728,6 @@ export default function Chat() {
                                             <Square size={10} fill="currentColor" /> Stop
                                         </button>
                                     </div>
-                                    <TypingIndicator />
                                 </div>
                             </div>
                         )}

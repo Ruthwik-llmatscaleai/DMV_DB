@@ -30,7 +30,7 @@
 .login-left-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(30, 58, 138, 0.88) 0%, rgba(59, 130, 246, 0.82) 100%);
+  background: linear-gradient(135deg, rgba(31, 31, 30, 0.92) 0%, rgba(107, 105, 102, 0.78) 50%, rgba(193, 95, 60, 0.65) 100%);
   z-index: 1;
 }
 

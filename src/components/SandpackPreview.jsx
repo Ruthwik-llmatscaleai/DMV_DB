@@ -76,8 +76,8 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
     const sandpackFiles = {};
     for (const [name, code] of Object.entries(files)) {
         let key = name.startsWith('/') ? name : `/${name}`;
-        // Map .jsx → .js so we override Sandpack's template defaults
-        if (key === '/App.jsx') key = '/App.js';
+        // Sandpack resolves .jsx imports as .js — map ALL .jsx files to .js
+        if (key.endsWith('.jsx')) key = key.replace(/\.jsx$/, '.js');
         sandpackFiles[key] = { code: sanitizeCode(code, key) };
     }
 

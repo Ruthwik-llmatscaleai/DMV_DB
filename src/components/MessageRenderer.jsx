@@ -3,7 +3,8 @@ import SandpackPreview from './SandpackPreview';
 
 // ── File block parser ────────────────────────────────────────────────────────
 // Extracts <file name="...">code</file> blocks from LLM output
-const FILE_BLOCK_REGEX = /<file\s+name="([^"]+)">\s*([\s\S]*?)\s*<\/file>/g;
+// More forgiving regex — handles whitespace, newlines, and single/double quotes
+const FILE_BLOCK_REGEX = /<file\s+name=["']([^"']+)["']>\s*([\s\S]*?)\s*<\/file>/g;
 const TEMPLATE_REGEX = /<template>(react|vanilla)<\/template>/i;
 
 function parseCodeBlocks(content) {

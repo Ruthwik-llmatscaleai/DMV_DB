@@ -94,8 +94,80 @@ async function autoConnectFromRegistry() {
     }
 }
 
+/**
+ * Gets a fresh Salesforce access token using the refresh token.
+ */
+async function getSalesforceAccessToken() {
+    const { SF_CLIENT_ID, SF_CLIENT_SECRET, SF_REFRESH_TOKEN, SF_INSTANCE_URL } = process.env;
+    if (!SF_CLIENT_ID || !SF_REFRESH_TOKEN) return null;
+
+    try {
+        const res = await fetch(`${SF_INSTANCE_URL}/services/oauth2/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                client_id: SF_CLIENT_ID,
+                client_secret: SF_CLIENT_SECRET,
+                refresh_token: SF_REFRESH_TOKEN,
+            }),
+        });
+        const data = await res.json();
+        if (data.access_token) {
+            console.log('[SF] Access token obtained');
+            return data.access_token;
+        }
+        console.error('[SF] Token refresh failed:', data.error_description || data.error);
+        return null;
+    } catch (e) {
+        console.error('[SF] Token refresh error:', e.message);
+        return null;
+    }
+}
+
+/**
+ * Connects to Salesforce Hosted MCP with OAuth.
+ */
+async function connectSalesforceMcp() {
+    const sfMcpUrl = process.env.SF_MCP_URL;
+    if (!sfMcpUrl || !process.env.SF_CLIENT_ID) {
+        console.log('[SF] Salesforce MCP not configured, skipping');
+        return;
+    }
+
+    // Don't duplicate
+    const exists = Array.from(activeConnectors.values()).find(c => c.name === 'Salesforce Hosted');
+    if (exists) return;
+
+    const accessToken = await getSalesforceAccessToken();
+    if (!accessToken) return;
+
+    const id = generateId();
+    try {
+        const transport = new StreamableHTTPClientTransport(new URL(sfMcpUrl), {
+            requestInit: {
+                headers: { 'Authorization': `Bearer ${accessToken}` },
+            },
+        });
+
+        const client = new Client(
+            { name: 'DMV-UI-Client', version: '1.0.0' },
+            { capabilities: { tools: {} } }
+        );
+
+        activeConnectors.set(id, { name: 'Salesforce Hosted', client, transport, status: 'connecting' });
+        await client.connect(transport);
+        activeConnectors.get(id).status = 'connected';
+        console.log('[SF] ✅ Connected to Salesforce Hosted MCP');
+    } catch (e) {
+        console.error('[SF] ❌ Failed to connect:', e.message);
+        if (activeConnectors.has(id)) activeConnectors.get(id).status = 'error';
+    }
+}
+
 // Start-up auto-connect (triggered on cold start in Vercel)
 autoConnectFromRegistry();
+connectSalesforceMcp();
 
 function buildTransportFromUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();

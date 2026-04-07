@@ -81,14 +81,14 @@ function TypingIndicator() {
 // ─── Empty state shown for brand-new threads (no messages yet) ───────────────
 function EmptyState() {
     const capabilities = [
-        { icon: '🌐', title: 'Build Websites', desc: 'Generate React + Tailwind sites from a text prompt, then preview and deploy' },
-        { icon: '🎨', title: 'Figma to Code', desc: 'Paste a Figma URL to convert designs into working React components' },
-        { icon: '📊', title: 'Query Databases', desc: 'Connect BigQuery, Salesforce, or any MCP data source and ask questions in plain English' },
-        { icon: '🔧', title: 'Create MCP Servers', desc: 'Auto-generate MCP servers for PostgreSQL, REST APIs, or any data source' },
-        { icon: '🚀', title: 'Deploy Anywhere', desc: 'One-click deploy to Vercel or GitHub Pages, or update an existing repo' },
-        { icon: '📦', title: 'Import & Edit', desc: 'Pull code from any GitHub repo, make changes via chat, and redeploy' },
-        { icon: '🖼️', title: 'Image to UI', desc: 'Upload a screenshot or mockup and Atlas will build matching code' },
-        { icon: '🔌', title: 'Connect Services', desc: 'Add MCP connectors for BigQuery, Salesforce, Figma, and more via the Connectors panel' },
+        { title: 'Build Websites', desc: 'Generate React + Tailwind sites from a text prompt, then preview and deploy' },
+        { title: 'Figma to Code', desc: 'Paste a Figma URL to convert designs into working React components' },
+        { title: 'Query Databases', desc: 'Connect BigQuery, Salesforce, or any MCP data source and query in plain English' },
+        { title: 'Create MCP Servers', desc: 'Auto-generate MCP servers for PostgreSQL, REST APIs, or any data source' },
+        { title: 'Deploy Anywhere', desc: 'One-click deploy to Vercel or GitHub Pages, or update an existing repo' },
+        { title: 'Import & Edit', desc: 'Pull code from any GitHub repo, make changes via chat, and redeploy' },
+        { title: 'Image to UI', desc: 'Upload a screenshot or mockup and Atlas will build matching code' },
+        { title: 'Connect Services', desc: 'Add MCP connectors for BigQuery, Salesforce, Figma, and more' },
     ];
 
     return (
@@ -141,7 +141,10 @@ function EmptyState() {
                             alignItems: 'flex-start',
                         }}
                     >
-                        <span style={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, marginTop: '1px' }}>{cap.icon}</span>
+                        <div style={{
+                            width: '6px', height: '6px', borderRadius: '50%',
+                            backgroundColor: 'var(--accent)', flexShrink: 0, marginTop: '6px',
+                        }} />
                         <div>
                             <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.15rem' }}>
                                 {cap.title}

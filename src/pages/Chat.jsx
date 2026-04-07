@@ -356,13 +356,26 @@ export default function Chat() {
     };
 
     // Store parsed code files in thread state for context preservation
-    const handleCodeParsed = useCallback((files, template) => {
+    const handleCodeParsed = useCallback((files, template, sourceMessage) => {
         if (!files) return;
-        setThreads(prev => prev.map(t =>
-            t.id === activeThreadId
-                ? { ...t, codeSnapshot: { ...files, _template: template, _updatedAt: Date.now() } }
-                : t
-        ));
+        // Extract GitHub repo URL if this came from an import
+        let sourceRepo = undefined;
+        if (sourceMessage) {
+            const repoMatch = sourceMessage.match(/\[([^\]]+)\]\((https:\/\/github\.com\/[^)]+)\)/);
+            if (repoMatch) sourceRepo = repoMatch[2];
+        }
+        setThreads(prev => prev.map(t => {
+            if (t.id !== activeThreadId) return t;
+            return {
+                ...t,
+                codeSnapshot: {
+                    ...files,
+                    _template: template,
+                    _sourceRepo: sourceRepo || t.codeSnapshot?._sourceRepo,
+                    _updatedAt: Date.now(),
+                },
+            };
+        }));
     }, [activeThreadId]);
 
     const handleNewChat = () => {
@@ -603,6 +616,7 @@ export default function Chat() {
                                         content={msg.role === 'assistant' ? msg.content : (msg.displayContent || msg.content)}
                                         role={msg.role}
                                         onCodeParsed={msg.role === 'assistant' ? handleCodeParsed : undefined}
+                                        sourceRepo={activeThread.codeSnapshot?._sourceRepo}
                                     />
 
                                     {/* File chips */}

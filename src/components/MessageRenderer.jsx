@@ -41,7 +41,7 @@ function parseCodeBlocks(content) {
  * Supports: bold (**text**), bullet lists (- item), numbered lists (1. item),
  * paragraph breaks, tables, and embedded Sandpack code previews.
  */
-export default function MessageRenderer({ content, role, onCodeParsed }) {
+export default function MessageRenderer({ content, role, onCodeParsed, sourceRepo }) {
     // Memoize parsing so we don't create new object refs every render
     const parsed = React.useMemo(() => parseCodeBlocks(content || ''), [content]);
     const { files, template, remainingText } = parsed;
@@ -49,9 +49,9 @@ export default function MessageRenderer({ content, role, onCodeParsed }) {
     // Notify parent of parsed code (for codeSnapshot tracking)
     React.useEffect(() => {
         if (files && onCodeParsed) {
-            onCodeParsed(files, template);
+            onCodeParsed(files, template, content);
         }
-    }, [files, onCodeParsed, template]);
+    }, [files, onCodeParsed, template, content]);
 
     if (!content) return null;
 
@@ -206,7 +206,7 @@ export default function MessageRenderer({ content, role, onCodeParsed }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
             {elements}
             {files && (
-                <SandpackPreview files={files} template={template} />
+                <SandpackPreview files={files} template={template} sourceRepo={sourceRepo} />
             )}
         </div>
     );

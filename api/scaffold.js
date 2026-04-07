@@ -43,6 +43,12 @@ function reactIndexHtml(projectName) {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${projectName || 'Atlas Site'}</title>
+  <meta name="description" content="${projectName || 'Atlas Site'} — Built with DMV Atlas">
+  <meta property="og:title" content="${projectName || 'Atlas Site'}">
+  <meta property="og:description" content="Built with DMV Atlas">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
   <script src="https://cdn.tailwindcss.com"><\/script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@600;700;800&display=swap" rel="stylesheet">
   <style>body { font-family: 'Inter', sans-serif; }</style>

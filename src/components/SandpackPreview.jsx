@@ -2,6 +2,7 @@ import React, { Suspense, useState, useRef, useEffect, useCallback } from 'react
 import {
     Copy, Check, Download, Maximize2, Minimize2, Code, Eye,
     Rocket, ExternalLink, Github, RefreshCw, ChevronDown,
+    Smartphone, Tablet, Monitor,
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { getScaffoldFiles } from '../utils/scaffoldTemplates';
@@ -19,7 +20,7 @@ const API_URL = import.meta.env.VITE_API_URL || '/api';
  * Supports React and vanilla HTML/CSS/JS templates.
  * Includes deploy to Vercel/GitHub and ZIP download.
  */
-export default function SandpackPreview({ files, template = 'react' }) {
+export default function SandpackPreview({ files, template = 'react', sourceRepo }) {
     const [expanded, setExpanded] = useState(false);
     const [copied, setCopied] = useState(false);
     const [activeView, setActiveView] = useState('preview');
@@ -31,6 +32,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
     const [deployError, setDeployError] = useState(null);
     const [deployTarget, setDeployTarget] = useState(null);
     const [showDeployMenu, setShowDeployMenu] = useState(false);
+    const [viewportWidth, setViewportWidth] = useState('100%'); // '375px' | '768px' | '1024px' | '100%'
     const deployMenuRef = useRef(null);
     const pollRef = useRef(null);
 
@@ -161,7 +163,8 @@ export default function SandpackPreview({ files, template = 'react' }) {
                     files,
                     template,
                     projectName: `atlas-${Date.now()}`,
-                    target,
+                    target: target === 'github-update' ? 'github' : target,
+                    sourceRepo: target === 'github-update' ? sourceRepo : undefined,
                 }),
             });
 
@@ -260,6 +263,35 @@ export default function SandpackPreview({ files, template = 'react' }) {
                     >
                         {activeView === 'preview' ? <Code size={14} /> : <Eye size={14} />}
                     </button>
+
+                    {/* Responsive viewport toggles */}
+                    <div style={{ display: 'flex', gap: '1px', marginLeft: '4px', marginRight: '4px', borderLeft: '1px solid var(--sandpack-border)', borderRight: '1px solid var(--sandpack-border)', paddingLeft: '4px', paddingRight: '4px' }}>
+                        <button
+                            className="sandpack-action-btn"
+                            onClick={() => setViewportWidth('375px')}
+                            title="Mobile (375px)"
+                            style={{ color: viewportWidth === '375px' ? 'var(--sandpack-accent)' : undefined }}
+                        >
+                            <Smartphone size={13} />
+                        </button>
+                        <button
+                            className="sandpack-action-btn"
+                            onClick={() => setViewportWidth('768px')}
+                            title="Tablet (768px)"
+                            style={{ color: viewportWidth === '768px' ? 'var(--sandpack-accent)' : undefined }}
+                        >
+                            <Tablet size={13} />
+                        </button>
+                        <button
+                            className="sandpack-action-btn"
+                            onClick={() => setViewportWidth('100%')}
+                            title="Desktop (full width)"
+                            style={{ color: viewportWidth === '100%' ? 'var(--sandpack-accent)' : undefined }}
+                        >
+                            <Monitor size={13} />
+                        </button>
+                    </div>
+
                     <button
                         className="sandpack-action-btn"
                         onClick={handleCopyAll}
@@ -306,6 +338,16 @@ export default function SandpackPreview({ files, template = 'react' }) {
                                     <Github size={14} />
                                     Deploy to GitHub Pages
                                 </button>
+                                {sourceRepo && (
+                                    <button
+                                        className="deploy-menu-item"
+                                        onClick={() => handleDeploy('github-update')}
+                                        style={{ borderTop: '1px solid var(--sandpack-border)' }}
+                                    >
+                                        <RefreshCw size={14} />
+                                        Update {sourceRepo.split('/').slice(-2).join('/')}
+                                    </button>
+                                )}
                             </div>
                         )}
                     </div>
@@ -369,6 +411,16 @@ export default function SandpackPreview({ files, template = 'react' }) {
                 overflow: 'hidden',
                 borderRadius: expanded ? 0 : '0 0 12px 12px',
                 minHeight: 0,
+                display: 'flex',
+                justifyContent: 'center',
+                backgroundColor: viewportWidth !== '100%' ? '#e5e5e2' : undefined,
+            }}>
+            <div style={{
+                width: viewportWidth,
+                height: '100%',
+                transition: 'width 0.3s ease',
+                boxShadow: viewportWidth !== '100%' ? '0 0 20px rgba(0,0,0,0.1)' : 'none',
+                backgroundColor: viewportWidth !== '100%' ? 'white' : undefined,
             }}>
                 <Suspense fallback={
                     <div className="sandpack-loading">
@@ -395,6 +447,7 @@ export default function SandpackPreview({ files, template = 'react' }) {
                         }}
                     />
                 </Suspense>
+            </div>
             </div>
         </div>
     );

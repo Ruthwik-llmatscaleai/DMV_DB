@@ -79,17 +79,18 @@ function TypingIndicator() {
 }
 
 // ─── Thinking status — cycles through what Atlas is doing ────────────────────
+const THINKING_STEPS = [
+    'Understanding your request...',
+    'Analyzing context...',
+    'Generating response...',
+    'Processing with AI...',
+];
+
 function ThinkingStatus() {
-    const steps = [
-        'Understanding your request...',
-        'Analyzing context...',
-        'Generating response...',
-        'Processing with AI...',
-    ];
     const [stepIdx, setStepIdx] = useState(0);
     useEffect(() => {
         const interval = setInterval(() => {
-            setStepIdx(prev => (prev + 1) % steps.length);
+            setStepIdx(prev => (prev + 1) % THINKING_STEPS.length);
         }, 3000);
         return () => clearInterval(interval);
     }, []);
@@ -103,7 +104,7 @@ function ThinkingStatus() {
                 animation: 'spin 0.8s linear infinite',
             }} />
             <span style={{ transition: 'opacity 0.3s', fontSize: '0.82rem' }}>
-                {steps[stepIdx]}
+                {THINKING_STEPS[stepIdx]}
             </span>
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
@@ -384,7 +385,12 @@ export default function Chat() {
                     : t
             ));
         } finally {
-            setIsLoading(false);
+            // Only clear loading if this request's controller is still current
+            // (prevents stale finally from cancelling a new request's loading state)
+            if (abortRef.current === controller) {
+                abortRef.current = null;
+                setIsLoading(false);
+            }
         }
     }, [activeThreadId]);
 

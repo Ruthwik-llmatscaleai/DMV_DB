@@ -71,6 +71,7 @@ async function connectToMcp(url, displayName, retries = 3) {
             console.error(`[System] ❌ Attempt ${attempt}/${retries} failed for ${displayName}:`, error.message);
             if (attempt < retries) {
                 console.log(`[System] Retrying in 5s...`);
+                try { await transport.close(); } catch { /* ignore */ }
                 await new Promise(r => setTimeout(r, 5000));
                 activeConnectors.delete(id);
                 continue;

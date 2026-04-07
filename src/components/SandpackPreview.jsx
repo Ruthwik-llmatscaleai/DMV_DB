@@ -81,12 +81,9 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
         sandpackFiles[key] = { code: sanitizeCode(code, key) };
     }
 
-    // Ensure App entry exists for React template
-    if (template === 'react' && !sandpackFiles['/App.js'] && !sandpackFiles['/App.jsx']) {
-        if (sandpackFiles['/index.jsx']) {
-            sandpackFiles['/App.js'] = sandpackFiles['/index.jsx'];
-            delete sandpackFiles['/index.jsx'];
-        } else if (sandpackFiles['/index.js']) {
+    // Ensure App.js exists for React template (all .jsx already mapped to .js above)
+    if (template === 'react' && !sandpackFiles['/App.js']) {
+        if (sandpackFiles['/index.js']) {
             sandpackFiles['/App.js'] = sandpackFiles['/index.js'];
             delete sandpackFiles['/index.js'];
         }

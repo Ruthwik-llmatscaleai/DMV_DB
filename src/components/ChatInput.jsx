@@ -24,13 +24,31 @@ export default function ChatInput({ onSendMessage, disabled = false }) {
             }
 
             const reader = new FileReader();
-            reader.onload = () => {
+            reader.onload = async () => {
                 const dataUrl = reader.result;
+                const base64 = dataUrl.split(',')[1];
+
+                // Try uploading to /api/upload (works on Cloud Run with /tmp)
+                let serverUrl = null;
+                try {
+                    const API_URL = import.meta.env.VITE_API_URL || '/api';
+                    const uploadRes = await fetch(`${API_URL}/upload`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ image: base64, mimeType: file.type, filename: file.name }),
+                    });
+                    if (uploadRes.ok) {
+                        const uploadData = await uploadRes.json();
+                        serverUrl = uploadData.url;
+                    }
+                } catch { /* fallback to base64 */ }
+
                 setAttachments(prev => [...prev, {
                     name: file.name,
                     type: file.type,
-                    dataUrl,
-                    preview: file.type.startsWith('image/') ? dataUrl : null,
+                    dataUrl: serverUrl || dataUrl,
+                    serverUrl,
+                    preview: file.type.startsWith('image/') ? (serverUrl || dataUrl) : null,
                 }]);
             };
             reader.readAsDataURL(file);
@@ -76,11 +94,28 @@ export default function ChatInput({ onSendMessage, disabled = false }) {
                 if (!file) continue;
 
                 const reader = new FileReader();
-                reader.onload = () => {
+                reader.onload = async () => {
+                    const dataUrl = reader.result;
+                    const base64 = dataUrl.split(',')[1];
+                    let serverUrl = null;
+                    try {
+                        const API_URL = import.meta.env.VITE_API_URL || '/api';
+                        const uploadRes = await fetch(`${API_URL}/upload`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: base64, mimeType: file.type, filename: `pasted-image.${file.type.split('/')[1]}` }),
+                        });
+                        if (uploadRes.ok) {
+                            const uploadData = await uploadRes.json();
+                            serverUrl = uploadData.url;
+                        }
+                    } catch { /* fallback to base64 */ }
+
                     setAttachments(prev => [...prev, {
                         name: `pasted-image.${file.type.split('/')[1]}`,
                         type: file.type,
-                        dataUrl: reader.result,
+                        dataUrl: serverUrl || dataUrl,
+                        serverUrl,
                         preview: reader.result,
                     }]);
                 };

@@ -28,7 +28,7 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type'],
 }));
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '32mb' }));
 
 // -----------------------------------------------------------------------
 // State
@@ -482,12 +482,24 @@ async function callGemini(messages, maxTokens = 16384, images = []) {
             const lastUser = [...contents].reverse().find(c => c.role === 'user');
             if (lastUser) {
                 for (const img of images) {
-                    lastUser.parts.push({
-                        inline_data: {
-                            mime_type: img.mimeType,
-                            data: img.data,
-                        }
-                    });
+                    let base64Data = img.data;
+                    // If image is a server URL (Cloud Run /tmp), read it
+                    if (!base64Data && img.url) {
+                        try {
+                            const filePath = path.join('/tmp/uploads', img.url.split('/').pop());
+                            if (fs.existsSync(filePath)) {
+                                base64Data = fs.readFileSync(filePath).toString('base64');
+                            }
+                        } catch { /* skip */ }
+                    }
+                    if (base64Data) {
+                        lastUser.parts.push({
+                            inline_data: {
+                                mime_type: img.mimeType,
+                                data: base64Data,
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -1294,13 +1306,87 @@ app.get('/api/test-tool', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------
+// Health Check
+// -----------------------------------------------------------------------
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        platform: process.env.K_SERVICE ? 'cloud-run' : 'local',
+        connectors: activeConnectors.size,
+        skills: skills.length,
+        env: {
+            GROQ_API_KEY: !!process.env.GROQ_API_KEY,
+            GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
+            DEPLOY_VERCEL_TOKEN: !!process.env.DEPLOY_VERCEL_TOKEN,
+            GITHUB_TOKEN: !!process.env.GITHUB_TOKEN,
+            FIGMA_API_KEY: !!process.env.FIGMA_API_KEY,
+            SF_CLIENT_ID: !!process.env.SF_CLIENT_ID,
+        },
+    });
+});
+
+// -----------------------------------------------------------------------
+// Image Upload to /tmp (Cloud Run persistent tmpfs)
+// -----------------------------------------------------------------------
+const UPLOAD_DIR = '/tmp/uploads';
+
+app.post('/api/upload', (req, res) => {
+    try {
+        const { image, mimeType, filename } = req.body;
+        if (!image) return res.status(400).json({ error: 'No image data provided' });
+
+        // Ensure upload directory exists
+        if (!fs.existsSync(UPLOAD_DIR)) {
+            fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+        }
+
+        const ext = (filename || 'image.png').split('.').pop() || 'png';
+        const id = Math.random().toString(36).substr(2, 12);
+        const savedName = `${id}.${ext}`;
+        const filePath = path.join(UPLOAD_DIR, savedName);
+
+        // Write base64 to file
+        const buffer = Buffer.from(image, 'base64');
+        fs.writeFileSync(filePath, buffer);
+
+        console.log(`[Upload] Saved ${savedName} (${buffer.length} bytes)`);
+        res.json({ url: `/api/uploads/${savedName}`, filename: savedName, size: buffer.length });
+    } catch (e) {
+        console.error('[Upload] Error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/uploads/:filename', (req, res) => {
+    const filePath = path.join(UPLOAD_DIR, req.params.filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    // Infer content type from extension
+    const ext = req.params.filename.split('.').pop()?.toLowerCase();
+    const mimeTypes = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp' };
+    res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(filePath);
+});
+
+// -----------------------------------------------------------------------
+// Global Error Handler (returns JSON, not HTML)
+// -----------------------------------------------------------------------
+app.use((err, req, res, next) => {
+    console.error('[API] Unhandled error:', err.message, err.stack);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+});
+
+// -----------------------------------------------------------------------
 // Static Frontend Serving (For Docker / Production)
 // -----------------------------------------------------------------------
 const distPath = path.join(__dirname, 'dist');
 
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.use((req, res) => {
+    // SPA fallback — only for non-API routes
+    app.use((req, res, next) => {
+        if (req.path.startsWith('/api/')) return next();
         res.sendFile(path.join(distPath, 'index.html'));
     });
 }

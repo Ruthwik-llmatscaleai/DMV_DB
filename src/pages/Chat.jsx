@@ -283,14 +283,18 @@ export default function Chat() {
                 requestBody.codeSnapshot = thread.codeSnapshot;
             }
 
-            // Include image attachments as base64 for multimodal LLM
+            // Include image attachments for multimodal LLM
             if (attachments?.length > 0) {
                 requestBody.images = attachments
                     .filter(a => a.type?.startsWith('image/'))
-                    .map(a => ({
-                        data: a.dataUrl.split(',')[1], // strip data:image/...;base64, prefix
-                        mimeType: a.type,
-                    }));
+                    .map(a => {
+                        if (a.serverUrl) {
+                            // Server-hosted image (Cloud Run /tmp) — send URL, backend will fetch
+                            return { url: a.serverUrl, mimeType: a.type };
+                        }
+                        // Fallback: base64 (Vercel or upload failed)
+                        return { data: a.dataUrl.split(',')[1], mimeType: a.type };
+                    });
             }
 
             const response = await fetch(`${API_URL}/chat`, {

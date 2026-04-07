@@ -9,6 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { fileURLToPath } from 'url';
 import { scaffoldForVercel, scaffoldForGitHub } from './api/scaffold.js';
+import { loadSkills, matchSkill, loadSkillReferences } from './api/skillLoader.js';
 
 dotenv.config();
 
@@ -166,6 +167,9 @@ async function connectSalesforceMcp() {
 // Start-up auto-connect
 autoConnectFromRegistry();
 connectSalesforceMcp();
+
+// Load Agent Skills
+const skills = loadSkills(path.join(__dirname, 'skills'));
 
 function buildTransportFromUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();
@@ -413,6 +417,22 @@ const CODE_GEN_KEYWORDS = [
     'frontend', 'web app', 'homepage', 'interface', 'template'
 ];
 
+const MCP_KEYWORDS = ['mcp', 'model context protocol', 'mcp server', 'connector', 'data source'];
+
+function isMcpCreationRequest(messages) {
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUserMsg) return false;
+    const text = (lastUserMsg.content || '').toLowerCase();
+    const hasMcp = MCP_KEYWORDS.some(kw => text.includes(kw));
+    const hasAction = /\b(create|build|make|generate|setup|connect|add)\b/.test(text);
+    return hasMcp && hasAction;
+}
+
+function getLastUserMessage(messages) {
+    const msg = [...messages].reverse().find(m => m.role === 'user');
+    return msg ? (msg.content || '').toLowerCase() : '';
+}
+
 function isCodeGenerationRequest(messages) {
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
     if (!lastUserMsg) return false;
@@ -643,10 +663,89 @@ app.post('/api/chat', async (req, res) => {
     }
 
     try {
+        const isMcpReq = isMcpCreationRequest(messages);
         const isCodeGen = isCodeGenerationRequest(messages) || (codeSnapshot && Object.keys(codeSnapshot).length > 0);
+
+        // ═══════════════════════════════════════════════════
+        // MCP SERVER CREATION PATH
+        // ═══════════════════════════════════════════════════
+        if (isMcpReq && !isCodeGen) {
+            console.log('[Chat] 🔧 MCP creation request detected');
+            const mcpSkill = skills.find(s => s.name === 'mcp-builder');
+            const skillContent = mcpSkill ? `\n\n## MCP Builder Skill\n${mcpSkill.content}` : '';
+
+            let refContent = '';
+            if (mcpSkill) {
+                const refs = loadSkillReferences(mcpSkill, ['python_mcp_server.md', 'node_mcp_server.md', 'mcp_best_practices.md']);
+                for (const [name, content] of Object.entries(refs)) {
+                    refContent += `\n\n## Reference: ${name}\n${content.slice(0, 3000)}`;
+                }
+            }
+
+            const mcpSystemPrompt = `You are Atlas, an expert MCP (Model Context Protocol) server builder.
+When the user asks to create an MCP server, generate complete, working code.
+
+## Output Format
+Output code using XML file tags:
+<file name="server.py">
+# complete code here
+</file>
+
+Or for TypeScript:
+<file name="server.ts">
+// complete code here
+</file>
+
+## Important Rules
+- For Python, use FastMCP framework. For Node/TypeScript, use @modelcontextprotocol/sdk.
+- Generate a complete, runnable server with proper tool definitions.
+- Include a requirements.txt (Python) or package.json (Node) with all dependencies.
+- Include clear instructions on how to run the server.
+- Use StreamableHTTP transport for remote servers (not stdio).
+- After the code, tell the user:
+  1. How to run the server locally
+  2. The URL they can use to connect it (e.g. http://localhost:8000/mcp)
+  3. That they can add it as a connector in the Connectors dropdown
+${skillContent}${refContent}`;
+
+            const mcpMessages = [
+                { role: 'system', content: mcpSystemPrompt },
+                ...messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+            ];
+
+            let msg = await callGemini(mcpMessages, 16384);
+            if (!msg) {
+                const groqBody = {
+                    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+                    messages: mcpMessages.map(m => ({ ...m, content: m.content ?? '' })),
+                    temperature: 0.3,
+                    max_tokens: 8192,
+                };
+                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+                    body: JSON.stringify(groqBody),
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.choices?.length) msg = data.choices[0].message;
+                }
+            }
+            if (!msg) return res.json({ role: 'assistant', content: "I'm having trouble generating the MCP server code. Please try again." });
+            return res.json({ role: 'assistant', content: msg.content });
+        }
 
         if (isCodeGen) {
             console.log('[Chat] 🎨 Code generation request detected');
+
+            const lastMsg = getLastUserMessage(messages);
+            const matchedSkill = matchSkill(lastMsg, skills);
+            let skillEnhancement = '';
+            if (matchedSkill && matchedSkill.name !== 'mcp-builder') {
+                console.log(`[Chat] 📚 Enhancing with skill: ${matchedSkill.name}`);
+                skillEnhancement = `\n\n## Active Skill: ${matchedSkill.name}\n${matchedSkill.content.slice(0, 2000)}`;
+            }
+
             let codeMessages = messages.map(m => ({
                 role: m.role,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
@@ -656,7 +755,7 @@ app.post('/api/chat', async (req, res) => {
                 codeMessages = compressCodeContext(codeMessages, codeSnapshot);
             }
             const geminiMessages = [
-                { role: 'system', content: CODE_GEN_SYSTEM_PROMPT },
+                { role: 'system', content: CODE_GEN_SYSTEM_PROMPT + skillEnhancement },
                 ...codeMessages,
             ];
             let msg = await callGemini(geminiMessages, 16384);
@@ -688,8 +787,16 @@ app.post('/api/chat', async (req, res) => {
         // DATA QUERY PATH
         const { availableTools, toolToConnector } = await buildToolRegistry();
 
+        const lastMsg = getLastUserMessage(messages);
+        const dataSkill = matchSkill(lastMsg, skills);
+        let enhancedSystemPrompt = SYSTEM_PROMPT;
+        if (dataSkill) {
+            console.log(`[Chat] 📚 Enhancing data query with skill: ${dataSkill.name}`);
+            enhancedSystemPrompt += `\n\n## Skill: ${dataSkill.name}\n${dataSkill.content.slice(0, 1500)}`;
+        }
+
         const messagesToLlm = [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: enhancedSystemPrompt },
             ...messages.map(m => ({
                 role: m.role,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),

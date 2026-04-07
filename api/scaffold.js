@@ -4,6 +4,10 @@
  * Used by deploy endpoints (Vercel & GitHub) and referenced by frontend for ZIP.
  */
 
+function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // ── React Scaffold Templates ─────────────────────────────────────────
 
 function reactPackageJson(projectName) {
@@ -37,14 +41,15 @@ export default defineConfig({
 `;
 
 function reactIndexHtml(projectName) {
+    const name = escHtml(projectName || 'Atlas Site');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${projectName || 'Atlas Site'}</title>
-  <meta name="description" content="${projectName || 'Atlas Site'} — Built with DMV Atlas">
-  <meta property="og:title" content="${projectName || 'Atlas Site'}">
+  <title>${name}</title>
+  <meta name="description" content="${name} — Built with DMV Atlas">
+  <meta property="og:title" content="${name}">
   <meta property="og:description" content="Built with DMV Atlas">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">

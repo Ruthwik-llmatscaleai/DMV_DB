@@ -1312,7 +1312,7 @@ app.post('/api/deploy', async (req, res) => {
                 }
             );
 
-            if (!pagesRes.ok) {
+            if (!pagesRes.ok && pagesRes.status !== 409) {
                 const pagesErr = await pagesRes.json().catch(() => ({}));
                 console.warn('[Deploy] GitHub Pages enable warning:', pagesErr.message);
             }
@@ -1325,7 +1325,7 @@ app.post('/api/deploy', async (req, res) => {
                 url: siteUrl,
                 repoUrl: repoUrl || `https://github.com/${owner}/${repo}`,
                 target: 'github',
-                status: isUpdate ? 'building' : 'building',
+                status: 'building',
             });
 
         } else {

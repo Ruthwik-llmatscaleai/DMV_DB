@@ -1195,7 +1195,7 @@ app.post('/api/deploy', async (req, res) => {
                     body: JSON.stringify({ build_type: 'workflow' }),
                 }
             );
-            if (!pagesRes.ok) {
+            if (!pagesRes.ok && pagesRes.status !== 409) {
                 const pagesErr = await pagesRes.json().catch(() => ({}));
                 console.warn('[Deploy] GitHub Pages enable warning:', pagesErr.message);
             }

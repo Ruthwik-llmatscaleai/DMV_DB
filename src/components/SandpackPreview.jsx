@@ -154,6 +154,7 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
         setDeployUrl(null);
         setDeployRepoUrl(null);
         setDeployError(null);
+        const pollTarget = target === 'github-update' ? 'github' : target;
 
         try {
             const res = await fetch(`${API_URL}/deploy`, {
@@ -186,7 +187,7 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
                 polls++;
                 try {
                     const statusRes = await fetch(
-                        `${API_URL}/deploy/status?id=${encodeURIComponent(data.deploymentId)}&target=${target}`
+                        `${API_URL}/deploy/status?id=${encodeURIComponent(data.deploymentId)}&target=${pollTarget}`
                     );
                     const statusData = await statusRes.json();
 
@@ -204,7 +205,7 @@ export default function SandpackPreview({ files, template = 'react', sourceRepo 
                         clearInterval(pollRef.current);
                         pollRef.current = null;
                         // For GitHub, the site may still be building — show the URL anyway
-                        if (target === 'github') {
+                        if (pollTarget === 'github') {
                             setDeployState('ready');
                             setDeployUrl(statusData.url || data.url);
                         } else {

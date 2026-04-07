@@ -4,6 +4,10 @@
  * contain a complete, deployable project structure.
  */
 
+function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 const REACT_VITE_CONFIG = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -36,15 +40,16 @@ function reactPackageJson(name) {
     }, null, 2);
 }
 
-function reactIndexHtml(name) {
+function reactIndexHtml(rawName) {
+    const name = escHtml(rawName || 'Atlas Site');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${name || 'Atlas Site'}</title>
-  <meta name="description" content="${name || 'Atlas Site'} — Built with DMV Atlas">
-  <meta property="og:title" content="${name || 'Atlas Site'}">
+  <title>${name}</title>
+  <meta name="description" content="${name} — Built with DMV Atlas">
+  <meta property="og:title" content="${name}">
   <meta property="og:description" content="Built with DMV Atlas">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">

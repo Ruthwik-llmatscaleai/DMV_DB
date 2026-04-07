@@ -306,7 +306,7 @@ function buildTransportFromUrl(rawUrl) {
     }
 
     const parsed = new URL(formattedUrl);
-    const isLegacySSE = parsed.pathname.endsWith('/sse');
+    const isLegacySSE = parsed.pathname.endsWith('/sse') || parsed.pathname.endsWith('/mcp');
     const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
 
     console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isSecureTunnel ? ' [secured]' : ''}`);

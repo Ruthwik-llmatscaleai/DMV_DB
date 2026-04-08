@@ -1,11 +1,59 @@
-import React from 'react';
+import React, { useState } from 'react';
 import SandpackPreview from './SandpackPreview';
+import { Copy, Check } from 'lucide-react';
 
 // ── File block parser ────────────────────────────────────────────────────────
 // Extracts <file name="...">code</file> blocks from LLM output
 // More forgiving regex — handles whitespace, newlines, and single/double quotes
 const FILE_BLOCK_REGEX = /<file\s+name=["']([^"']+)["']>\s*([\s\S]*?)\s*<\/file>/g;
 const TEMPLATE_REGEX = /<template>(react|vanilla)<\/template>/i;
+
+// ── Markdown code fence fallback parser ──────────────────────────────────────
+// Detects ```lang \n // filename.ext \n code \n ``` blocks when <file> tags are missing.
+// Handles: ```jsx\n// App.jsx\n...``` and ```jsx\n// components/Navbar.jsx\n...```
+const FENCED_BLOCK_REGEX = /```[\w]*\s*\n\s*\/\/\s*([^\n]+\.(?:jsx?|tsx?|css|html|json))\s*\n([\s\S]*?)```/g;
+
+// ── Generic fenced code block extractor ─────────────────────────────────────
+// Extracts ALL ```lang\ncode\n``` blocks (not just file-comment ones)
+const GENERIC_FENCE_REGEX = /```([\w-]*)\s*\n([\s\S]*?)```/g;
+
+function extractCodeFences(content) {
+    const blocks = [];
+    let match;
+    const regex = new RegExp(GENERIC_FENCE_REGEX.source, 'g');
+    while ((match = regex.exec(content)) !== null) {
+        blocks.push({ lang: match[1] || 'text', code: match[2].trimEnd() });
+    }
+    const remaining = content.replace(new RegExp(GENERIC_FENCE_REGEX.source, 'g'), '').trim();
+    return { codeBlocks: blocks, textWithoutFences: remaining };
+}
+
+function parseMarkdownFences(content) {
+    const files = {};
+    let match;
+    const regex = new RegExp(FENCED_BLOCK_REGEX.source, 'g');
+
+    while ((match = regex.exec(content)) !== null) {
+        let filename = match[1].trim();
+        const code = match[2].trim();
+        filename = filename.replace(/^\/\/\s*/, '').replace(/^─+\s*/, '').trim();
+        if (!filename) continue;
+        const key = filename.startsWith('/') ? filename : `/${filename}`;
+        files[key] = code;
+    }
+
+    let remainingText = content.replace(new RegExp(FENCED_BLOCK_REGEX.source, 'g'), '').trim();
+    remainingText = remainingText.replace(/```[\w]*\s*[\s\S]*?```/g, '').trim();
+
+    return { files: Object.keys(files).length > 0 ? files : null, remainingText };
+}
+
+// ── Detect server-only files (no browser preview needed) ────────────────────
+const FRONTEND_EXTS = ['.jsx', '.tsx', '.html', '.css', '.vue', '.svelte'];
+function isServerOnlyFiles(files) {
+    if (!files) return false;
+    return Object.keys(files).every(name => !FRONTEND_EXTS.some(ext => name.endsWith(ext)));
+}
 
 function parseCodeBlocks(content) {
     const files = {};
@@ -42,6 +90,18 @@ function parseCodeBlocks(content) {
     // Also strip truncated file blocks
     remainingText = remainingText.replace(/<file\s+name=["'][^"']+["']>[\s\S]*$/, '').trim();
 
+    // If no <file> tags found, try markdown code fences as fallback
+    if (Object.keys(files).length === 0) {
+        const fenced = parseMarkdownFences(content);
+        if (fenced.files) {
+            return {
+                files: fenced.files,
+                template,
+                remainingText: fenced.remainingText,
+            };
+        }
+    }
+
     return {
         files: Object.keys(files).length > 0 ? files : null,
         template,
@@ -69,10 +129,11 @@ export default function MessageRenderer({ content, role, onCodeParsed, sourceRep
 
     if (!content) return null;
 
-    // Step 2: Sanitize ONLY the remaining text (not the code)
-    const sanitised = remainingText
-        .replace(/`([^`\n]+)`/g, '$1')
-        .trim();
+    // Extract generic fenced code blocks from remaining text
+    const { codeBlocks, textWithoutFences } = extractCodeFences(remainingText);
+
+    // Keep inline backticks as-is (rendered as <code> in InlineText)
+    const sanitised = textWithoutFences.trim();
 
     const lines = sanitised.split('\n');
     const elements = [];
@@ -216,10 +277,18 @@ export default function MessageRenderer({ content, role, onCodeParsed, sourceRep
         i++;
     }
 
+    const serverOnly = isServerOnlyFiles(files);
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
             {elements}
-            {files && (
+            {codeBlocks.length > 0 && codeBlocks.map((block, idx) => (
+                <CodeBlock key={`cb-${idx}`} lang={block.lang} code={block.code} />
+            ))}
+            {files && serverOnly && (
+                <ServerCodeView files={files} />
+            )}
+            {files && !serverOnly && (
                 <SandpackPreview files={files} template={template} sourceRepo={sourceRepo} />
             )}
         </div>
@@ -227,14 +296,13 @@ export default function MessageRenderer({ content, role, onCodeParsed, sourceRep
 }
 
 /**
- * Renders inline text with **bold** and *italic* support.
+ * Renders inline text with **bold**, *italic*, and `code` support.
  */
 function InlineText({ text }) {
     if (!text) return null;
 
-    // Split on **bold** and *italic*
     const parts = [];
-    const regex = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
+    const regex = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`\n]+`)/g;
     let last = 0;
     let match;
 
@@ -245,6 +313,8 @@ function InlineText({ text }) {
         const raw = match[0];
         if (raw.startsWith('**')) {
             parts.push({ type: 'bold', value: raw.slice(2, -2) });
+        } else if (raw.startsWith('`')) {
+            parts.push({ type: 'code', value: raw.slice(1, -1) });
         } else {
             parts.push({ type: 'italic', value: raw.slice(1, -1) });
         }
@@ -262,8 +332,178 @@ function InlineText({ text }) {
             {parts.map((part, idx) => {
                 if (part.type === 'bold') return <strong key={idx}>{part.value}</strong>;
                 if (part.type === 'italic') return <em key={idx}>{part.value}</em>;
+                if (part.type === 'code') return (
+                    <code key={idx} style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        padding: '0.15em 0.4em',
+                        borderRadius: '4px',
+                        fontSize: '0.88em',
+                        fontFamily: 'monospace',
+                        border: '1px solid var(--border)',
+                    }}>{part.value}</code>
+                );
                 return <span key={idx}>{part.value}</span>;
             })}
         </>
+    );
+}
+
+/**
+ * Renders a fenced code block with language label and copy button.
+ */
+function CodeBlock({ lang, code }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = () => {
+        navigator.clipboard.writeText(code);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    return (
+        <div style={{
+            borderRadius: '8px',
+            overflow: 'hidden',
+            border: '1px solid var(--border)',
+            margin: '0.5rem 0',
+        }}>
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '0.4rem 0.75rem',
+                backgroundColor: '#1e1e1e',
+                color: '#a0a0a0',
+                fontSize: '0.75rem',
+                fontFamily: 'monospace',
+            }}>
+                <span>{lang}</span>
+                <button
+                    onClick={handleCopy}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: '#a0a0a0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '0.72rem',
+                    }}
+                >
+                    {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
+                </button>
+            </div>
+            <pre style={{
+                margin: 0,
+                padding: '1rem',
+                backgroundColor: '#1e1e1e',
+                color: '#d4d4d4',
+                overflowX: 'auto',
+                fontSize: '0.85rem',
+                lineHeight: '1.5',
+                fontFamily: "'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+            }}>
+                <code>{code}</code>
+            </pre>
+        </div>
+    );
+}
+
+/**
+ * Renders server-side code files (MCP servers, etc.) as styled code blocks
+ * with filename tabs instead of a browser preview.
+ */
+function ServerCodeView({ files }) {
+    const [activeFile, setActiveFile] = useState(Object.keys(files)[0]);
+    const [copied, setCopied] = useState(false);
+    const filenames = Object.keys(files);
+
+    const handleCopy = () => {
+        navigator.clipboard.writeText(files[activeFile]);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    const getExtLang = (name) => {
+        if (name.endsWith('.py')) return 'python';
+        if (name.endsWith('.ts')) return 'typescript';
+        if (name.endsWith('.js')) return 'javascript';
+        if (name.endsWith('.json')) return 'json';
+        if (name.endsWith('.yaml') || name.endsWith('.yml')) return 'yaml';
+        if (name.endsWith('.toml')) return 'toml';
+        if (name.endsWith('.md')) return 'markdown';
+        return 'text';
+    };
+
+    return (
+        <div style={{
+            borderRadius: '8px',
+            overflow: 'hidden',
+            border: '1px solid var(--border)',
+            margin: '0.75rem 0',
+        }}>
+            {/* File tabs */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0,
+                backgroundColor: '#252526',
+                borderBottom: '1px solid #3c3c3c',
+                overflowX: 'auto',
+            }}>
+                {filenames.map(name => (
+                    <button
+                        key={name}
+                        onClick={() => { setActiveFile(name); setCopied(false); }}
+                        style={{
+                            padding: '0.5rem 1rem',
+                            fontSize: '0.78rem',
+                            fontFamily: 'monospace',
+                            background: name === activeFile ? '#1e1e1e' : 'transparent',
+                            color: name === activeFile ? '#d4d4d4' : '#808080',
+                            border: 'none',
+                            borderBottom: name === activeFile ? '2px solid var(--accent)' : '2px solid transparent',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                        }}
+                    >
+                        {name.replace(/^\//, '')}
+                    </button>
+                ))}
+                <div style={{ flex: 1 }} />
+                <button
+                    onClick={handleCopy}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: '#a0a0a0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '0.72rem',
+                        padding: '0.5rem 0.75rem',
+                    }}
+                >
+                    {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
+                </button>
+            </div>
+            {/* Code */}
+            <pre style={{
+                margin: 0,
+                padding: '1rem',
+                backgroundColor: '#1e1e1e',
+                color: '#d4d4d4',
+                overflowX: 'auto',
+                fontSize: '0.85rem',
+                lineHeight: '1.5',
+                fontFamily: "'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+                maxHeight: '500px',
+                overflowY: 'auto',
+            }}>
+                <code>{files[activeFile]}</code>
+            </pre>
+        </div>
     );
 }

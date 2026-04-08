@@ -26,7 +26,7 @@ export default function Login() {
             sessionStorage.setItem('atlas_logged_in', 'true');
             navigate('/chat');
         } else {
-            setError('Invalid credentials. Please use admin/admin.');
+            setError('Sign in failed. Username or password is incorrect.');
         }
     };
 

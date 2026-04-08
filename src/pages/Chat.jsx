@@ -4,7 +4,8 @@ import ChatInput from '../components/ChatInput';
 import MessageRenderer from '../components/MessageRenderer';
 import {
     MessageSquarePlus, LogOut, ShieldCheck,
-    Trash2, ChevronDown, Copy, Check, RefreshCw, Database, Square
+    Trash2, ChevronDown, Copy, Check, RefreshCw, Database, Square,
+    PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -218,6 +219,7 @@ export default function Chat() {
     const [failedMessageId, setFailedMessageId] = useState(null);
     const abortRef = useRef(null);
     const [lastUserPayload, setLastUserPayload] = useState(null);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
 
     // Save threads to localStorage — strip large data (base64 previews) to avoid quota
     useEffect(() => {
@@ -385,12 +387,8 @@ export default function Chat() {
                     : t
             ));
         } finally {
-            // Only clear loading if this request's controller is still current
-            // (prevents stale finally from cancelling a new request's loading state)
-            if (abortRef.current === controller) {
-                abortRef.current = null;
-                setIsLoading(false);
-            }
+            abortRef.current = null;
+            setIsLoading(false);
         }
     }, [activeThreadId]);
 
@@ -475,7 +473,7 @@ export default function Chat() {
     return (
         <div className="chat-layout">
             {/* ── Sidebar ── */}
-            <div className="sidebar">
+            <div className={`sidebar${sidebarOpen ? '' : ' sidebar-collapsed'}`}>
                 <div className="sidebar-header">
                     <div className="flex items-center gap-2 font-bold text-lg" style={{ color: 'var(--accent)' }}>
                         <ShieldCheck size={22} />
@@ -574,16 +572,35 @@ export default function Chat() {
             {/* ── Main Content ── */}
             <div className="main-content">
                 <div className="chat-header">
-                    <div style={{
-                        fontWeight: 600,
-                        fontSize: '1rem',
-                        color: 'var(--text-primary)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        maxWidth: '400px',
-                    }}>
-                        {activeThread.title}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
+                        <button
+                            onClick={() => setSidebarOpen(prev => !prev)}
+                            title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                color: 'var(--text-secondary)',
+                                padding: '4px',
+                                borderRadius: '6px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                flexShrink: 0,
+                            }}
+                        >
+                            {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
+                        </button>
+                        <span style={{
+                            fontWeight: 600,
+                            fontSize: '1rem',
+                            color: 'var(--text-primary)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: '400px',
+                        }}>
+                            {activeThread.title}
+                        </span>
                     </div>
                     <ConnectorsDropdown />
                 </div>

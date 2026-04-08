@@ -32,13 +32,17 @@ function reactPackageJson(projectName) {
     }, null, 2);
 }
 
-const REACT_VITE_CONFIG = `import { defineConfig } from 'vite'
+function reactViteConfig(projectName) {
+    // Use './' as base so assets resolve correctly on GitHub Pages
+    return `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  base: './',
 })
 `;
+}
 
 function reactIndexHtml(projectName) {
     const name = escHtml(projectName || 'Atlas Site');
@@ -119,11 +123,38 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci && npm run build
+      - run: npm install && npm run build
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+`;
+
+const GITHUB_PAGES_WORKFLOW_VANILLA = `name: Deploy to GitHub Pages
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
       - id: deployment
         uses: actions/deploy-pages@v4
 `;
@@ -164,7 +195,7 @@ export function getScaffoldFilesRaw(files, template, projectName) {
     } else {
         // React template
         result['package.json'] = reactPackageJson(projectName);
-        result['vite.config.js'] = REACT_VITE_CONFIG;
+        result['vite.config.js'] = reactViteConfig(projectName);
         result['index.html'] = reactIndexHtml(projectName);
         result['src/main.jsx'] = REACT_MAIN_JSX;
 
@@ -210,8 +241,10 @@ export function scaffoldForVercel(files, template, projectName) {
 export function scaffoldForGitHub(files, template, projectName) {
     const raw = getScaffoldFilesRaw(files, template, projectName);
 
-    // Add GitHub Pages workflow for projects that need building
-    if (template !== 'vanilla') {
+    // Add GitHub Pages workflow
+    if (template === 'vanilla') {
+        raw['.github/workflows/deploy.yml'] = GITHUB_PAGES_WORKFLOW_VANILLA;
+    } else {
         raw['.github/workflows/deploy.yml'] = GITHUB_PAGES_WORKFLOW;
     }
 

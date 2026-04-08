@@ -42,8 +42,9 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 async function connectToMcp(url, displayName, retries = 3) {
     const id = generateId();
     for (let attempt = 1; attempt <= retries; attempt++) {
+        let transport;
         try {
-            const transport = buildTransportFromUrl(url);
+            transport = buildTransportFromUrl(url);
             const client = new Client(
                 { name: 'Atlas-AI-Client', version: '1.0.0' },
                 { capabilities: { tools: {} } }
@@ -69,6 +70,29 @@ async function connectToMcp(url, displayName, retries = 3) {
             return true;
         } catch (error) {
             console.error(`[System] ❌ Attempt ${attempt}/${retries} failed for ${displayName}:`, error.message);
+
+            // Fallback: if StreamableHTTP failed on a /mcp path, retry with SSE transport
+            const formattedUrl = formatMcpUrl(url);
+            const parsed = new URL(formattedUrl);
+            if (parsed.pathname.endsWith('/mcp') && !(transport instanceof SSEClientTransport)) {
+                console.log(`[System] Trying SSE fallback for ${displayName}...`);
+                try { await transport.close(); } catch { /* ignore */ }
+                try {
+                    const sseTransport = new SSEClientTransport(parsed);
+                    const sseClient = new Client(
+                        { name: 'Atlas-AI-Client', version: '1.0.0' },
+                        { capabilities: { tools: {} } }
+                    );
+                    activeConnectors.set(id, { name: displayName, client: sseClient, transport: sseTransport, status: 'connecting' });
+                    await sseClient.connect(sseTransport);
+                    activeConnectors.get(id).status = 'connected';
+                    console.log(`[System] ✅ Connected to ${displayName} via SSE fallback!`);
+                    return true;
+                } catch (sseError) {
+                    console.error(`[System] ❌ SSE fallback also failed for ${displayName}:`, sseError.message);
+                }
+            }
+
             if (attempt < retries) {
                 console.log(`[System] Retrying in 5s...`);
                 try { await transport.close(); } catch { /* ignore */ }
@@ -298,15 +322,21 @@ registerSalesforceDataConnector();
 // Load Agent Skills
 const skills = loadSkills(path.join(__dirname, 'skills'));
 
-function buildTransportFromUrl(rawUrl) {
+function formatMcpUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();
     if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
         const isLocal = /^(localhost|127\.|0\.0\.0\.0)/.test(formattedUrl);
         formattedUrl = (isLocal ? 'http://' : 'https://') + formattedUrl;
     }
+    return formattedUrl;
+}
 
+function buildTransportFromUrl(rawUrl) {
+    const formattedUrl = formatMcpUrl(rawUrl);
     const parsed = new URL(formattedUrl);
-    const isLegacySSE = parsed.pathname.endsWith('/sse') || parsed.pathname.endsWith('/mcp');
+    // Only explicit /sse paths use legacy SSE transport.
+    // /mcp paths use StreamableHTTP (the modern MCP standard).
+    const isLegacySSE = parsed.pathname.endsWith('/sse');
     const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
 
     console.log(`[MCP] ${formattedUrl}  →  ${isLegacySSE ? 'SSE (legacy)' : 'StreamableHTTP (modern)'}${isSecureTunnel ? ' [secured]' : ''}`);
@@ -387,6 +417,31 @@ app.post('/api/connectors', async (req, res) => {
         res.json({ success: true, id: connectorId, message: `Connected to ${displayName}` });
     } catch (error) {
         console.error(`[MCP] ❌ Failed to connect to ${displayName}:`, error);
+
+        // Fallback: if StreamableHTTP failed on a /mcp URL, retry with SSE
+        if (url) {
+            try {
+                const formattedUrl = formatMcpUrl(url);
+                const parsed = new URL(formattedUrl);
+                if (parsed.pathname.endsWith('/mcp') && !(transport instanceof SSEClientTransport)) {
+                    console.log(`[MCP] Trying SSE fallback for ${displayName}...`);
+                    try { await transport.close(); } catch { /* ignore */ }
+                    const sseTransport = new SSEClientTransport(parsed);
+                    const sseClient = new Client(
+                        { name: 'Atlas-AI-Client', version: '1.0.0' },
+                        { capabilities: { tools: {} } }
+                    );
+                    activeConnectors.set(connectorId, { name: displayName, client: sseClient, transport: sseTransport, status: 'connecting' });
+                    await sseClient.connect(sseTransport);
+                    activeConnectors.get(connectorId).status = 'connected';
+                    console.log(`[MCP] ✅ Connected to ${displayName} via SSE fallback`);
+                    return res.json({ success: true, id: connectorId, message: `Connected to ${displayName}` });
+                }
+            } catch (sseError) {
+                console.error(`[MCP] ❌ SSE fallback also failed:`, sseError.message);
+            }
+        }
+
         if (activeConnectors.has(connectorId)) activeConnectors.get(connectorId).status = 'error';
         res.status(500).json({ error: error.message || 'Connection failed — see server console.' });
     }
@@ -499,7 +554,7 @@ When asked to build, create, or generate a website, app, landing page, dashboard
 6. For complex requests, build the core layout first and tell the user they can ask to modify specific sections.
 7. When modifying existing code, output ALL files again with changes applied (not just the diff).
 8. For vanilla HTML/CSS requests, use <template>vanilla</template> before the file blocks.
-9. Do NOT use markdown code fences. ONLY use the <file name="..."> XML tags.
+9. CRITICAL: Do NOT use markdown code fences (\`\`\`). ALWAYS wrap code in <file name="filename.jsx">code</file> XML tags. The preview system ONLY works with <file> tags. Using \`\`\` will break the preview.
 
 ## Design System (ALWAYS use these)
 Tailwind CSS and Google Fonts are pre-loaded in the preview environment. Use them directly.
@@ -583,6 +638,14 @@ function isCodeGenerationRequest(messages) {
         return true;
     }
     return false;
+}
+
+/**
+ * Detects if the user wants to edit/improve existing code (when a codeSnapshot exists).
+ * Catches generic requests like "improve this", "make it better", "enhance it", etc.
+ */
+function isCodeEditRequest(text) {
+    return /\b(improve|enhance|better|upgrade|polish|refine|refactor|beautif|redesign|restyle|redo|revamp|tweak|adjust|clean up|modernize|optimize|prettify|spruce|overhaul)\b/i.test(text);
 }
 
 // -----------------------------------------------------------------------
@@ -838,14 +901,18 @@ app.post('/api/chat', async (req, res) => {
 
     try {
         // Heuristic: If they mention specific integrations, they probably want data, not code generation.
-        const msgText = (getLastUserMessage(messages)?.content || '').toLowerCase();
-        const isDataIntent = /\b(salesforce|bigquery|tickets|project|query|database|fetch|find)\b/i.test(msgText);
-        
+        // getLastUserMessage() returns a lowercase string, not a message object
+        const msgText = getLastUserMessage(messages);
+        const isDataIntent = /\b(salesforce|bigquery|tickets|project|query|database|fetch|find|data|records|sales|customers|accounts|how many|show me|list all|count)\b/i.test(msgText);
+
         const isCodeGenReq = isCodeGenerationRequest(messages);
-        const hasCodeSnapshot = (codeSnapshot && Object.keys(codeSnapshot).length > 0);
-        
-        // Only force Code Gen if there's an explicit request OR (it has a snapshot AND NO explicit data intent)
-        const isCodeGen = isCodeGenReq || (hasCodeSnapshot && !isDataIntent);
+        const hasCodeSnapshot = (codeSnapshot && Object.keys(codeSnapshot).filter(k => !k.startsWith('_')).length > 0);
+        const isEditReq = isCodeEditRequest(msgText);
+
+        // Route to Code Gen if:
+        // 1. Explicit code gen keywords (build website, create app, etc.) AND not a data query
+        // 2. Has existing code snapshot AND user wants edits/improvements AND not a data query
+        const isCodeGen = (!isDataIntent) && (isCodeGenReq || (hasCodeSnapshot && isEditReq));
         const isMcpReq = isMcpCreationRequest(messages);
         const lastUserText = getLastUserMessage(messages);
         const lastUserTextRaw = getLastUserMessageRaw(messages);
@@ -1286,7 +1353,11 @@ app.post('/api/deploy', async (req, res) => {
                 console.log(`[Deploy] Updating existing repo: ${owner}/${repo}`);
             } else {
                 const repoName = (projectName || `atlas-${Date.now()}`).toLowerCase().replace(/[^a-z0-9-]/g, '-');
-                const createRepoRes = await fetch('https://api.github.com/user/repos', {
+                const githubOrg = process.env.GITHUB_ORG;
+                const createRepoUrl = githubOrg
+                    ? `https://api.github.com/orgs/${githubOrg}/repos`
+                    : 'https://api.github.com/user/repos';
+                const createRepoRes = await fetch(createRepoUrl, {
                     method: 'POST',
                     headers: ghHeaders,
                     body: JSON.stringify({

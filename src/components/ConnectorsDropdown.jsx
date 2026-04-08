@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown, Server, Box, Link as LinkIcon, Terminal, Trash2, Edit2, X, Check, RefreshCw, AlertCircle } from 'lucide-react';
 
 export default function ConnectorsDropdown() {
@@ -25,7 +25,7 @@ export default function ConnectorsDropdown() {
     // ---------------------------------------------------------------
     // localStorage helpers – persist connector URLs across reloads
     // ---------------------------------------------------------------
-    const STORAGE_KEY = 'dmv_saved_connectors';
+    const STORAGE_KEY = 'atlas_saved_connectors';
 
     const getSavedConnectors = () => {
         try {
@@ -59,7 +59,7 @@ export default function ConnectorsDropdown() {
         }
     };
 
-    const fetchConnectors = async () => {
+    const fetchConnectors = useCallback(async () => {
         try {
             const res = await fetch(`${API_URL}/connectors`);
             const data = await res.json();
@@ -67,7 +67,7 @@ export default function ConnectorsDropdown() {
         } catch (e) {
             console.error('Failed to fetch connectors:', e);
         }
-    };
+    }, [API_URL]);
 
     // Auto-reconnect saved connectors on mount (handles Vercel cold starts & reloads)
     const autoReconnectSavedConnectors = async () => {
@@ -108,7 +108,7 @@ export default function ConnectorsDropdown() {
         autoReconnectSavedConnectors();
         const interval = setInterval(fetchConnectors, 5000);
         return () => clearInterval(interval);
-    }, []);
+    }, [fetchConnectors]);
 
     useEffect(() => {
         function handleClickOutside(event) {
@@ -453,8 +453,20 @@ export default function ConnectorsDropdown() {
                                         </div>
 
                                         {connector.status === 'connected' && connector.tools?.length > 0 && (
-                                            <div className="connector-tools">
-                                                Tools: {connector.tools.join(', ')}
+                                            <div className="connector-tools" style={{ marginTop: '4px' }}>
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '2px' }}>
+                                                    {connector.tools.length} tool{connector.tools.length !== 1 ? 's' : ''}:
+                                                </div>
+                                                {connector.tools.map((tool, i) => {
+                                                    const name = typeof tool === 'string' ? tool : tool.name;
+                                                    const desc = typeof tool === 'object' ? tool.description : '';
+                                                    return (
+                                                        <div key={i} style={{ fontSize: '0.7rem', lineHeight: '1.4', padding: '1px 0' }} title={desc}>
+                                                            <span style={{ color: 'var(--accent)', fontFamily: 'monospace' }}>{name}</span>
+                                                            {desc && <span style={{ color: 'var(--text-secondary)', marginLeft: '4px' }}>— {desc.length > 60 ? desc.slice(0, 60) + '…' : desc}</span>}
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         )}
                                     </div>

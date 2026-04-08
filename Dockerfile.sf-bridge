@@ -1,0 +1,17 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package descriptors and install dependencies
+COPY package*.json ./
+RUN npm install --omit=dev --no-optional
+
+# Copy the bridge file and any required local directories
+COPY mcp-sf-bridge.js .
+# Note: The Salesforce bridge might need @salesforce/mcp which is already in dependencies
+
+ENV PORT=8080
+EXPOSE ${PORT}
+
+# Start the bridge
+CMD ["node", "mcp-sf-bridge.js"]

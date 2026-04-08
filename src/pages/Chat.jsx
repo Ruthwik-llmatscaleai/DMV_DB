@@ -4,14 +4,15 @@ import ChatInput from '../components/ChatInput';
 import MessageRenderer from '../components/MessageRenderer';
 import {
     MessageSquarePlus, LogOut, ShieldCheck,
-    Trash2, ChevronDown, Copy, Check, RefreshCw, Database
+    Trash2, ChevronDown, Copy, Check, RefreshCw, Database, Square,
+    PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const WELCOME_MESSAGE = {
     id: 1,
     role: 'assistant',
-    content: "Hello! I'm Atlas, your DMV administrative assistant. I can help you look up vehicle records, check registration information, run data summaries, and much more.\n\nConnect a database via the **Connectors** button above, then ask me anything about your data.",
+    content: "Hello! I'm Atlas, your AI-powered assistant by LLMAtScale.ai. I can help you:\n\n- **Query databases** — BigQuery, Salesforce, or any connected data source\n- **Build websites** — Generate React + Tailwind sites from a text prompt or Figma design\n- **Deploy** — One-click deploy to Vercel or GitHub Pages\n- **Create MCP servers** — Auto-generate connectors for any database or API\n- **Import & edit** — Pull code from GitHub, edit, and redeploy\n\nConnect a data source via **Connectors**, or just ask me to build something!",
     timestamp: Date.now(),
 };
 
@@ -78,14 +79,52 @@ function TypingIndicator() {
     );
 }
 
+// ─── Thinking status — cycles through what Atlas is doing ────────────────────
+const THINKING_STEPS = [
+    'Understanding your request...',
+    'Analyzing context...',
+    'Generating response...',
+    'Processing with AI...',
+];
+
+function ThinkingStatus() {
+    const [stepIdx, setStepIdx] = useState(0);
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setStepIdx(prev => (prev + 1) % THINKING_STEPS.length);
+        }, 3000);
+        return () => clearInterval(interval);
+    }, []);
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{
+                width: '12px', height: '12px', borderRadius: '50%',
+                border: '2px solid var(--border)',
+                borderTopColor: 'var(--accent)',
+                animation: 'spin 0.8s linear infinite',
+            }} />
+            <span style={{ transition: 'opacity 0.3s', fontSize: '0.82rem' }}>
+                {THINKING_STEPS[stepIdx]}
+            </span>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+    );
+}
+
 // ─── Empty state shown for brand-new threads (no messages yet) ───────────────
-function EmptyState({ onQuickPrompt }) {
-    const prompts = [
-        'What datasets are available?',
-        'Show me a summary of vehicle registrations',
-        'How many records are in the database?',
-        'List the available tables',
+function EmptyState() {
+    const capabilities = [
+        { title: 'Build Websites', desc: 'Generate React + Tailwind sites from a text prompt, then preview and deploy' },
+        { title: 'Figma to Code', desc: 'Paste a Figma URL to convert designs into working React components' },
+        { title: 'Query Databases', desc: 'Connect BigQuery, Salesforce, or any MCP data source and query in plain English' },
+        { title: 'Create MCP Servers', desc: 'Auto-generate MCP servers for PostgreSQL, REST APIs, or any data source' },
+        { title: 'Deploy Anywhere', desc: 'One-click deploy to Vercel or GitHub Pages, or update an existing repo' },
+        { title: 'Import & Edit', desc: 'Pull code from any GitHub repo, make changes via chat, and redeploy' },
+        { title: 'Image to UI', desc: 'Upload a screenshot or mockup and Atlas will build matching code' },
+        { title: 'Connect Services', desc: 'Add MCP connectors for BigQuery, Salesforce, Figma, and more' },
     ];
+
     return (
         <div style={{
             flex: 1,
@@ -93,62 +132,62 @@ function EmptyState({ onQuickPrompt }) {
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: '3rem 1rem',
-            gap: '2rem',
+            padding: '2.5rem 1.5rem',
+            gap: '1.5rem',
+            overflowY: 'auto',
         }}>
             <div style={{ textAlign: 'center' }}>
                 <div style={{
-                    width: '64px', height: '64px',
-                    borderRadius: '16px',
+                    width: '56px', height: '56px',
+                    borderRadius: '14px',
                     backgroundColor: 'var(--accent)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    margin: '0 auto 1rem',
+                    margin: '0 auto 0.75rem',
                     opacity: 0.9,
                 }}>
-                    <Database size={32} color="white" />
+                    <Database size={28} color="white" />
                 </div>
-                <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.4rem' }}>
-                    Ask Atlas anything
+                <h2 style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                    What can Atlas do?
                 </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', maxWidth: '360px' }}>
-                    Connect a database connector, then ask a question to explore your data.
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', maxWidth: '400px' }}>
+                    Type a message below to get started, or explore what's possible.
                 </p>
             </div>
 
             <div style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
-                gap: '0.75rem',
-                maxWidth: '480px',
+                gap: '0.6rem',
+                maxWidth: '560px',
                 width: '100%',
             }}>
-                {prompts.map((p, i) => (
-                    <button
+                {capabilities.map((cap, i) => (
+                    <div
                         key={i}
-                        onClick={() => onQuickPrompt(p)}
                         style={{
-                            padding: '0.75rem 1rem',
+                            padding: '0.75rem 0.85rem',
                             borderRadius: '10px',
                             border: '1px solid var(--border)',
                             backgroundColor: 'var(--bg-secondary)',
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                            fontSize: '0.85rem',
-                            color: 'var(--text-primary)',
-                            lineHeight: '1.4',
-                            transition: 'border-color 0.15s, background-color 0.15s',
-                        }}
-                        onMouseEnter={e => {
-                            e.currentTarget.style.borderColor = 'var(--accent)';
-                            e.currentTarget.style.backgroundColor = 'white';
-                        }}
-                        onMouseLeave={e => {
-                            e.currentTarget.style.borderColor = 'var(--border)';
-                            e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                            display: 'flex',
+                            gap: '0.6rem',
+                            alignItems: 'flex-start',
                         }}
                     >
-                        {p}
-                    </button>
+                        <div style={{
+                            width: '6px', height: '6px', borderRadius: '50%',
+                            backgroundColor: 'var(--accent)', flexShrink: 0, marginTop: '6px',
+                        }} />
+                        <div>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.15rem' }}>
+                                {cap.title}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                                {cap.desc}
+                            </div>
+                        </div>
+                    </div>
                 ))}
             </div>
         </div>
@@ -161,7 +200,7 @@ export default function Chat() {
     const messagesEndRef = useRef(null);
     const messagesContainerRef = useRef(null);
 
-    const THREADS_KEY = 'dmv_chat_threads';
+    const THREADS_KEY = 'atlas_chat_threads';
     const loadSavedThreads = () => {
         try {
             const saved = JSON.parse(localStorage.getItem(THREADS_KEY));
@@ -178,16 +217,42 @@ export default function Chat() {
     const [isLoading, setIsLoading] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     const [failedMessageId, setFailedMessageId] = useState(null);
+    const abortRef = useRef(null);
     const [lastUserPayload, setLastUserPayload] = useState(null);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
 
-    // Save threads to localStorage whenever they change
+    // Save threads to localStorage — strip large data (base64 previews) to avoid quota
     useEffect(() => {
         try {
-            localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
-        } catch { /* quota exceeded — ignore */ }
+            const stripped = threads.map(t => ({
+                ...t,
+                messages: t.messages.map(m => {
+                    if (m.attachmentPreviews?.length > 0) {
+                        const { attachmentPreviews, ...rest } = m;
+                        return rest;
+                    }
+                    return m;
+                }),
+            }));
+            localStorage.setItem(THREADS_KEY, JSON.stringify(stripped));
+        } catch {
+            // Quota exceeded — trim older threads and retry
+            try {
+                const trimmed = threads.slice(0, 10).map(t => ({
+                    ...t,
+                    messages: t.messages.slice(-50).map(m => {
+                        const { attachmentPreviews, ...rest } = m;
+                        return rest;
+                    }),
+                }));
+                localStorage.setItem(THREADS_KEY, JSON.stringify(trimmed));
+            } catch { /* truly full */ }
+        }
     }, [threads]);
 
     const activeThread = threads.find(t => t.id === activeThreadId) || threads[0];
+    const activeThreadRef = useRef(activeThread);
+    activeThreadRef.current = activeThread;
 
     // Scroll to bottom
     const scrollToBottom = useCallback((behavior = 'smooth') => {
@@ -211,26 +276,32 @@ export default function Chat() {
     }, []);
 
     // Core send logic, extracted so retry can reuse it
-    const sendMessage = useCallback(async ({ text }) => {
-        if (!text.trim()) return;
+    const sendMessage = useCallback(async ({ text, attachments }) => {
+        if (!text?.trim() && !attachments?.length) return;
 
-        const fullPrompt = text;
+        const thread = activeThreadRef.current;
         const now = Date.now();
+
+        // Build file names list for display
+        const fileNames = attachments?.map(a => a.name) || [];
+
         const userMessage = {
             id: now,
             role: 'user',
-            content: fullPrompt,
-            displayContent: text,
+            content: text || '(image attached)',
+            displayContent: text || '(image attached)',
+            files: fileNames.length > 0 ? fileNames : undefined,
+            attachmentPreviews: attachments?.filter(a => a.preview).map(a => a.preview) || [],
             timestamp: now,
         };
 
-        const previousMessages = activeThread.messages;
+        const previousMessages = thread.messages;
         const isFirstUserMessage = previousMessages.filter(m => m.role === 'user').length === 0;
         const newTitle = isFirstUserMessage && text
             ? text.slice(0, 40) + (text.length > 40 ? '…' : '')
-            : activeThread.title;
+            : thread.title;
 
-        setLastUserPayload({ text });
+        setLastUserPayload({ text, attachments });
         setFailedMessageId(null);
 
         setThreads(prev => prev.map(t =>
@@ -247,10 +318,34 @@ export default function Chat() {
                 content: m.content,
             }));
 
+            // Include codeSnapshot for context compression on code-editing follow-ups
+            const requestBody = { messages: contextToSend };
+            if (thread.codeSnapshot && Object.keys(thread.codeSnapshot).length > 0) {
+                requestBody.codeSnapshot = thread.codeSnapshot;
+            }
+
+            // Include image attachments for multimodal LLM
+            if (attachments?.length > 0) {
+                requestBody.images = attachments
+                    .filter(a => a.type?.startsWith('image/'))
+                    .map(a => {
+                        if (a.serverUrl) {
+                            // Server-hosted image (Cloud Run /tmp) — send URL, backend will fetch
+                            return { url: a.serverUrl, mimeType: a.type };
+                        }
+                        // Fallback: base64 (Vercel or upload failed)
+                        return { data: a.dataUrl.split(',')[1], mimeType: a.type };
+                    });
+            }
+
+            const controller = new AbortController();
+            abortRef.current = controller;
+
             const response = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: contextToSend }),
+                body: JSON.stringify(requestBody),
+                signal: controller.signal,
             });
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -269,6 +364,11 @@ export default function Chat() {
                     : t
             ));
         } catch (error) {
+            // If user clicked stop, don't show error
+            if (error.name === 'AbortError') {
+                console.log('[Chat] Request aborted by user');
+                return;
+            }
             console.error('Chat error:', error);
             const errId = Date.now() + 2;
             setFailedMessageId(errId);
@@ -287,11 +387,20 @@ export default function Chat() {
                     : t
             ));
         } finally {
+            abortRef.current = null;
             setIsLoading(false);
         }
-    }, [activeThread, activeThreadId]);
+    }, [activeThreadId]);
 
     const handleSendMessage = (payload) => sendMessage(payload);
+
+    const handleStop = () => {
+        if (abortRef.current) {
+            abortRef.current.abort();
+            abortRef.current = null;
+        }
+        setIsLoading(false);
+    };
 
     const handleRetry = () => {
         if (!lastUserPayload) return;
@@ -305,9 +414,30 @@ export default function Chat() {
         sendMessage(lastUserPayload);
     };
 
-    const handleQuickPrompt = (text) => {
-        sendMessage({ text });
-    };
+    // Quick prompt removed — EmptyState now shows capabilities list
+
+    // Store parsed code files in thread state for context preservation
+    const handleCodeParsed = useCallback((files, template, sourceMessage) => {
+        if (!files) return;
+        // Extract GitHub repo URL if this came from an import
+        let sourceRepo = undefined;
+        if (sourceMessage) {
+            const repoMatch = sourceMessage.match(/\[([^\]]+)\]\((https:\/\/github\.com\/[^)]+)\)/);
+            if (repoMatch) sourceRepo = repoMatch[2];
+        }
+        setThreads(prev => prev.map(t => {
+            if (t.id !== activeThreadId) return t;
+            return {
+                ...t,
+                codeSnapshot: {
+                    ...files,
+                    _template: template,
+                    _sourceRepo: sourceRepo || t.codeSnapshot?._sourceRepo,
+                    _updatedAt: Date.now(),
+                },
+            };
+        }));
+    }, [activeThreadId]);
 
     const handleNewChat = () => {
         const newThread = {
@@ -343,11 +473,11 @@ export default function Chat() {
     return (
         <div className="chat-layout">
             {/* ── Sidebar ── */}
-            <div className="sidebar">
+            <div className={`sidebar${sidebarOpen ? '' : ' sidebar-collapsed'}`}>
                 <div className="sidebar-header">
                     <div className="flex items-center gap-2 font-bold text-lg" style={{ color: 'var(--accent)' }}>
                         <ShieldCheck size={22} />
-                        <span>DMV Atlas</span>
+                        <span>Atlas AI</span>
                     </div>
                 </div>
 
@@ -432,7 +562,7 @@ export default function Chat() {
                     <button
                         className="btn btn-ghost w-full justify-start gap-2"
                         style={{ padding: '0.5rem', fontSize: '0.875rem' }}
-                        onClick={() => navigate('/login')}
+                        onClick={() => { sessionStorage.removeItem('atlas_logged_in'); navigate('/login'); }}
                     >
                         <LogOut size={16} /> Log out
                     </button>
@@ -442,23 +572,42 @@ export default function Chat() {
             {/* ── Main Content ── */}
             <div className="main-content">
                 <div className="chat-header">
-                    <div style={{
-                        fontWeight: 600,
-                        fontSize: '1rem',
-                        color: 'var(--text-primary)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        maxWidth: '400px',
-                    }}>
-                        {activeThread.title}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
+                        <button
+                            onClick={() => setSidebarOpen(prev => !prev)}
+                            title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                color: 'var(--text-secondary)',
+                                padding: '4px',
+                                borderRadius: '6px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                flexShrink: 0,
+                            }}
+                        >
+                            {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
+                        </button>
+                        <span style={{
+                            fontWeight: 600,
+                            fontSize: '1rem',
+                            color: 'var(--text-primary)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: '400px',
+                        }}>
+                            {activeThread.title}
+                        </span>
                     </div>
                     <ConnectorsDropdown />
                 </div>
 
                 {/* Messages or empty state */}
                 {showEmptyState ? (
-                    <EmptyState onQuickPrompt={handleQuickPrompt} />
+                    <EmptyState />
                 ) : (
                     <div
                         ref={messagesContainerRef}
@@ -523,9 +672,31 @@ export default function Chat() {
                                         </div>
                                     )}
 
+                                    {/* Image previews in user messages */}
+                                    {msg.attachmentPreviews?.length > 0 && (
+                                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                                            {msg.attachmentPreviews.map((src, i) => (
+                                                <img
+                                                    key={i}
+                                                    src={src}
+                                                    alt="Attached"
+                                                    style={{
+                                                        maxWidth: '200px',
+                                                        maxHeight: '150px',
+                                                        borderRadius: '8px',
+                                                        border: '1px solid var(--border)',
+                                                        objectFit: 'cover',
+                                                    }}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+
                                     <MessageRenderer
-                                        content={msg.displayContent || msg.content}
+                                        content={msg.role === 'assistant' ? msg.content : (msg.displayContent || msg.content)}
                                         role={msg.role}
+                                        onCodeParsed={msg.role === 'assistant' ? handleCodeParsed : undefined}
+                                        sourceRepo={activeThread.codeSnapshot?._sourceRepo}
                                     />
 
                                     {/* File chips */}
@@ -558,12 +729,28 @@ export default function Chat() {
                                 </div>
                                 <div className="message-content">
                                     <div style={{
-                                        fontSize: '0.875rem', color: 'var(--text-secondary)',
-                                        fontWeight: 600, marginBottom: '0.4rem',
+                                        fontSize: '0.82rem', color: 'var(--text-secondary)',
+                                        fontWeight: 500, marginBottom: '0.5rem',
+                                        display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     }}>
-                                        Atlas
+                                        <ThinkingStatus />
+                                        <button
+                                            onClick={handleStop}
+                                            title="Stop generating"
+                                            style={{
+                                                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                                padding: '2px 8px', borderRadius: '4px',
+                                                border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+                                                cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+                                                color: 'var(--text-secondary)', transition: 'all 0.15s',
+                                                marginLeft: 'auto',
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--error)'; e.currentTarget.style.color = 'var(--error)'; }}
+                                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                                        >
+                                            <Square size={10} fill="currentColor" /> Stop
+                                        </button>
                                     </div>
-                                    <TypingIndicator />
                                 </div>
                             </div>
                         )}

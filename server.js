@@ -7,6 +7,11 @@ import fs from 'fs';
 import path from 'path';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { fileURLToPath } from 'url';
+import { scaffoldForVercel, scaffoldForGitHub } from './api/scaffold.js';
+import { loadSkills, matchSkill, loadSkillReferences } from './api/skillLoader.js';
+import { extractFigmaFileKey, extractNodeId, fetchFigmaFile, fetchFigmaStyles, figmaToContext, isFigmaRequest } from './api/figma.js';
+import { parseGitHubUrl, importGitHubRepo, isGitHubImportRequest } from './api/github-import.js';
 
 dotenv.config();
 
@@ -16,14 +21,14 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-console.log('🚀 DMV Backend STARTUP - v2.1 (Simplified, Auth Removed)');
+console.log('🚀 Atlas AI Backend STARTUP - v2.1 (Simplified, Auth Removed)');
 
 app.use(cors({
-    origin: process.env.ALLOWED_ORIGIN || 'http://localhost:5173',
+    origin: process.env.ALLOWED_ORIGIN || '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type'],
 }));
-app.use(express.json());
+app.use(express.json({ limit: '32mb' }));
 
 // -----------------------------------------------------------------------
 // State
@@ -34,40 +39,74 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 /**
  * Connects to an MCP URL and adds it to the active pool.
  */
-async function connectToMcp(url, displayName) {
+async function connectToMcp(url, displayName, retries = 3) {
     const id = generateId();
-    try {
-        const transport = buildTransportFromUrl(url);
-        const client = new Client(
-            { name: 'DMV-UI-Client', version: '1.0.0' },
-            { capabilities: { tools: {} } }
-        );
-        
-        activeConnectors.set(id, { 
-            name: displayName, 
-            client, 
-            transport, 
-            status: 'connecting' 
-        });
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        let transport;
+        try {
+            transport = buildTransportFromUrl(url);
+            const client = new Client(
+                { name: 'Atlas-AI-Client', version: '1.0.0' },
+                { capabilities: { tools: {} } }
+            );
 
-        const timer = setTimeout(() => {
-            if (activeConnectors.get(id)?.status === 'connecting')
-                console.error(`[System] Timeout connecting to ${displayName}`);
-        }, 15_000);
+            activeConnectors.set(id, {
+                name: displayName,
+                client,
+                transport,
+                status: 'connecting'
+            });
 
-        await client.connect(transport);
-        clearTimeout(timer);
+            const timer = setTimeout(() => {
+                if (activeConnectors.get(id)?.status === 'connecting')
+                    console.error(`[System] Timeout connecting to ${displayName}`);
+            }, 15_000);
 
-        activeConnectors.get(id).status = 'connected';
-        console.log(`[System] ✅ Successfully connected to ${displayName}!`);
-        return true;
-    } catch (error) {
-        console.error(`[System] ❌ Failed to connect to ${displayName}:`, error.message);
-        if (activeConnectors.has(id)) {
-             activeConnectors.get(id).status = 'error';
+            await client.connect(transport);
+            clearTimeout(timer);
+
+            activeConnectors.get(id).status = 'connected';
+            console.log(`[System] ✅ Successfully connected to ${displayName}!`);
+            return true;
+        } catch (error) {
+            console.error(`[System] ❌ Attempt ${attempt}/${retries} failed for ${displayName}:`, error.message);
+
+            // Fallback: if StreamableHTTP failed on a /mcp path, retry with SSE transport
+            const formattedUrl = formatMcpUrl(url);
+            const parsed = new URL(formattedUrl);
+            if (parsed.pathname.endsWith('/mcp') && !(transport instanceof SSEClientTransport)) {
+                console.log(`[System] Trying SSE fallback for ${displayName}...`);
+                try { await transport.close(); } catch { /* ignore */ }
+                try {
+                    const sseTransport = new SSEClientTransport(parsed);
+                    const sseClient = new Client(
+                        { name: 'Atlas-AI-Client', version: '1.0.0' },
+                        { capabilities: { tools: {} } }
+                    );
+                    activeConnectors.set(id, { name: displayName, client: sseClient, transport: sseTransport, status: 'connecting' });
+                    await sseClient.connect(sseTransport);
+                    activeConnectors.get(id).status = 'connected';
+                    console.log(`[System] ✅ Connected to ${displayName} via SSE fallback!`);
+                    return true;
+                } catch (sseError) {
+                    console.error(`[System] ❌ SSE fallback also failed for ${displayName}:`, sseError.message);
+                }
+            }
+
+            if (attempt < retries) {
+                console.log(`[System] Retrying in 5s...`);
+                try { await transport.close(); } catch { /* ignore */ }
+                await new Promise(r => setTimeout(r, 5000));
+                activeConnectors.delete(id);
+                continue;
+            }
+            if (activeConnectors.has(id)) {
+                activeConnectors.get(id).status = 'error';
+            }
+            return false;
         }
-        return false;
     }
+    return false;
 }
 
 /**
@@ -83,7 +122,10 @@ async function autoConnectFromRegistry() {
             const connectors = JSON.parse(data);
             console.log(`[System] Loading ${connectors.length} MCPs from registry...`);
             for (const { name, url } of connectors) {
-                await connectToMcp(url, name);
+                const exists = Array.from(activeConnectors.values()).find(c => c.name === name);
+                if (!exists) {
+                    await connectToMcp(url, name);
+                }
             }
         }
     } catch (err) {
@@ -91,17 +133,209 @@ async function autoConnectFromRegistry() {
     }
 }
 
+/**
+ * Gets a fresh Salesforce access token using the refresh token.
+ */
+async function getSalesforceAccessToken() {
+    const { SF_CLIENT_ID, SF_CLIENT_SECRET, SF_REFRESH_TOKEN, SF_INSTANCE_URL } = process.env;
+    if (!SF_CLIENT_ID || !SF_REFRESH_TOKEN) return null;
+
+    try {
+        const res = await fetch(`${SF_INSTANCE_URL}/services/oauth2/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                client_id: SF_CLIENT_ID,
+                client_secret: SF_CLIENT_SECRET,
+                refresh_token: SF_REFRESH_TOKEN,
+            }),
+        });
+        const data = await res.json();
+        if (data.access_token) {
+            console.log('[SF] Access token obtained');
+            return data.access_token;
+        }
+        console.error('[SF] Token refresh failed:', data.error_description || data.error);
+        return null;
+    } catch (e) {
+        console.error('[SF] Token refresh error:', e.message);
+        return null;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Salesforce Direct REST API — SOQL queries without MCP bridge/CLI
+// -----------------------------------------------------------------------
+const SF_API_VERSION = 'v62.0';
+
+async function salesforceRestCall(endpoint) {
+    const token = await getSalesforceAccessToken();
+    if (!token) throw new Error('Could not obtain Salesforce access token — check SF_CLIENT_ID / SF_REFRESH_TOKEN / SF_INSTANCE_URL');
+
+    const instanceUrl = process.env.SF_INSTANCE_URL;
+    const res = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}${endpoint}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(Array.isArray(err) ? err[0]?.message : err.message || `Salesforce API ${res.status}`);
+    }
+    return res.json();
+}
+
+function registerSalesforceDataConnector() {
+    const { SF_CLIENT_ID, SF_REFRESH_TOKEN, SF_INSTANCE_URL } = process.env;
+    if (!SF_CLIENT_ID || !SF_REFRESH_TOKEN || !SF_INSTANCE_URL) {
+        console.log('[SF] Salesforce Data connector skipped — missing env vars');
+        return;
+    }
+
+    const id = generateId();
+    activeConnectors.set(id, {
+        name: 'Salesforce Data',
+        status: 'connected',
+        transport: { close: async () => {} },
+        client: {
+            listTools: async () => ({
+                tools: [
+                    {
+                        name: 'salesforce_soql_query',
+                        description: 'Execute a SOQL query against Salesforce to retrieve records (Accounts, Contacts, Cases, Opportunities, custom objects, etc.). Use standard SOQL syntax. Example: SELECT Id, Name FROM Account LIMIT 10',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                query: {
+                                    type: 'string',
+                                    description: 'The SOQL query to execute, e.g. SELECT Id, Name FROM Account WHERE CreatedDate = THIS_YEAR LIMIT 20',
+                                },
+                            },
+                            required: ['query'],
+                        },
+                    },
+                    {
+                        name: 'salesforce_list_objects',
+                        description: 'List all available Salesforce objects (standard and custom) in the connected org. Use this first to discover what data exists before writing SOQL queries.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                filter: {
+                                    type: 'string',
+                                    description: 'Optional filter — "custom" for custom objects only, "standard" for standard only, or leave empty for all',
+                                },
+                            },
+                        },
+                    },
+                ],
+            }),
+            callTool: async ({ name, arguments: args }) => {
+                try {
+                    if (name === 'salesforce_soql_query') {
+                        const q = args?.query;
+                        if (!q) return { content: [{ type: 'text', text: 'Error: "query" parameter is required' }] };
+                        const data = await salesforceRestCall(`/query?q=${encodeURIComponent(q)}`);
+                        const records = (data.records || []).map(r => {
+                            const { attributes, ...fields } = r;
+                            return fields;
+                        });
+                        return {
+                            content: [{ type: 'text', text: JSON.stringify({ totalSize: data.totalSize, done: data.done, records }, null, 2) }],
+                        };
+                    }
+
+                    if (name === 'salesforce_list_objects') {
+                        const data = await salesforceRestCall('/sobjects');
+                        let objects = (data.sobjects || []).filter(o => o.queryable);
+                        if (args?.filter === 'custom') objects = objects.filter(o => o.custom);
+                        else if (args?.filter === 'standard') objects = objects.filter(o => !o.custom);
+                        else {
+                            // Default: show custom objects first, then common standard objects
+                            const custom = objects.filter(o => o.custom);
+                            const commonStd = objects.filter(o => !o.custom && [
+                                'Account','Contact','Lead','Opportunity','Case','Task','Event',
+                                'Campaign','Contract','Order','Product2','Pricebook2','User',
+                                'Asset','Solution','ContentDocument','Report','Dashboard',
+                            ].includes(o.name));
+                            objects = [...custom, ...commonStd];
+                        }
+                        const list = objects.map(o => ({ name: o.name, label: o.label, custom: o.custom }));
+                        return {
+                            content: [{ type: 'text', text: JSON.stringify({ count: list.length, objects: list }, null, 2) }],
+                        };
+                    }
+
+                    return { content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
+                } catch (e) {
+                    return { content: [{ type: 'text', text: `Salesforce API error: ${e.message}` }] };
+                }
+            },
+        },
+    });
+    console.log('[SF] ✅ Salesforce Data connector registered (Direct REST API)');
+}
+
+/**
+ * Connects to Salesforce Hosted MCP with OAuth.
+ */
+async function connectSalesforceMcp() {
+    const sfMcpUrl = process.env.SF_MCP_URL;
+    if (!sfMcpUrl || !process.env.SF_CLIENT_ID) {
+        console.log('[SF] Salesforce MCP not configured, skipping');
+        return;
+    }
+
+    const exists = Array.from(activeConnectors.values()).find(c => c.name === 'Salesforce Hosted');
+    if (exists) return;
+
+    const accessToken = await getSalesforceAccessToken();
+    if (!accessToken) return;
+
+    const id = generateId();
+    try {
+        const transport = new StreamableHTTPClientTransport(new URL(sfMcpUrl), {
+            requestInit: {
+                headers: { 'Authorization': `Bearer ${accessToken}` },
+            },
+        });
+
+        const client = new Client(
+            { name: 'Atlas-AI-Client', version: '1.0.0' },
+            { capabilities: { tools: {} } }
+        );
+
+        activeConnectors.set(id, { name: 'Salesforce Hosted', client, transport, status: 'connecting' });
+        await client.connect(transport);
+        activeConnectors.get(id).status = 'connected';
+        console.log('[SF] ✅ Connected to Salesforce Hosted MCP');
+    } catch (e) {
+        console.error('[SF] ❌ Failed to connect:', e.message);
+        if (activeConnectors.has(id)) activeConnectors.get(id).status = 'error';
+    }
+}
+
 // Start-up auto-connect
 autoConnectFromRegistry();
+connectSalesforceMcp();
+registerSalesforceDataConnector();
 
-function buildTransportFromUrl(rawUrl) {
+// Load Agent Skills
+const skills = loadSkills(path.join(__dirname, 'skills'));
+
+function formatMcpUrl(rawUrl) {
     let formattedUrl = rawUrl.trim();
     if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
         const isLocal = /^(localhost|127\.|0\.0\.0\.0)/.test(formattedUrl);
         formattedUrl = (isLocal ? 'http://' : 'https://') + formattedUrl;
     }
+    return formattedUrl;
+}
 
+function buildTransportFromUrl(rawUrl) {
+    const formattedUrl = formatMcpUrl(rawUrl);
     const parsed = new URL(formattedUrl);
+    // Only explicit /sse paths use legacy SSE transport.
+    // /mcp paths use StreamableHTTP (the modern MCP standard).
     const isLegacySSE = parsed.pathname.endsWith('/sse');
     const isSecureTunnel = parsed.hostname.includes('zrok.io') || parsed.hostname.includes('run.app');
 
@@ -120,13 +354,17 @@ function buildTransportFromUrl(rawUrl) {
 
 // GET /api/connectors
 app.get('/api/connectors', async (req, res) => {
+    try {
     const list = [];
     for (const [id, c] of activeConnectors.entries()) {
         let tools = [];
         if (c.status === 'connected') {
             try {
                 const response = await c.client.listTools();
-                tools = response.tools.map(t => t.name);
+                tools = response.tools.map(t => ({
+                    name: t.name,
+                    description: (t.description || '').slice(0, 150),
+                }));
             } catch (e) {
                 console.error(`[MCP] listTools failed for ${c.name}:`, e.message);
             }
@@ -134,6 +372,10 @@ app.get('/api/connectors', async (req, res) => {
         list.push({ id, name: c.name, status: c.status, tools });
     }
     res.json(list);
+    } catch (e) {
+        console.error('[API] /connectors error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // POST /api/connectors
@@ -152,7 +394,7 @@ app.post('/api/connectors', async (req, res) => {
     }
 
     const client = new Client(
-        { name: 'DMV-UI-Client', version: '1.0.0' },
+        { name: 'Atlas-AI-Client', version: '1.0.0' },
         { capabilities: { tools: {} } }
     );
 
@@ -175,6 +417,31 @@ app.post('/api/connectors', async (req, res) => {
         res.json({ success: true, id: connectorId, message: `Connected to ${displayName}` });
     } catch (error) {
         console.error(`[MCP] ❌ Failed to connect to ${displayName}:`, error);
+
+        // Fallback: if StreamableHTTP failed on a /mcp URL, retry with SSE
+        if (url) {
+            try {
+                const formattedUrl = formatMcpUrl(url);
+                const parsed = new URL(formattedUrl);
+                if (parsed.pathname.endsWith('/mcp') && !(transport instanceof SSEClientTransport)) {
+                    console.log(`[MCP] Trying SSE fallback for ${displayName}...`);
+                    try { await transport.close(); } catch { /* ignore */ }
+                    const sseTransport = new SSEClientTransport(parsed);
+                    const sseClient = new Client(
+                        { name: 'Atlas-AI-Client', version: '1.0.0' },
+                        { capabilities: { tools: {} } }
+                    );
+                    activeConnectors.set(connectorId, { name: displayName, client: sseClient, transport: sseTransport, status: 'connecting' });
+                    await sseClient.connect(sseTransport);
+                    activeConnectors.get(connectorId).status = 'connected';
+                    console.log(`[MCP] ✅ Connected to ${displayName} via SSE fallback`);
+                    return res.json({ success: true, id: connectorId, message: `Connected to ${displayName}` });
+                }
+            } catch (sseError) {
+                console.error(`[MCP] ❌ SSE fallback also failed:`, sseError.message);
+            }
+        }
+
         if (activeConnectors.has(connectorId)) activeConnectors.get(connectorId).status = 'error';
         res.status(500).json({ error: error.message || 'Connection failed — see server console.' });
     }
@@ -199,7 +466,7 @@ app.put('/api/connectors/:id', async (req, res) => {
 
             const transport = buildTransportFromUrl(url);
             const client = new Client(
-                { name: 'DMV-UI-Client', version: '1.0.0' },
+                { name: 'Atlas-AI-Client', version: '1.0.0' },
                 { capabilities: { tools: {} } }
             );
 
@@ -233,7 +500,7 @@ app.delete('/api/connectors/:id', async (req, res) => {
 // -----------------------------------------------------------------------
 // System Prompt
 // -----------------------------------------------------------------------
-const SYSTEM_PROMPT = `You are Atlas, an intelligent data assistant for the California DMV.
+const SYSTEM_PROMPT = `You are Atlas, an intelligent AI assistant by LLMAtScale.ai. You help users query databases, build websites, convert Figma designs to code, create MCP servers, and deploy to Vercel/GitHub.
 You have direct access to live database tools — use them proactively.
 
 ## ABSOLUTE SECURITY RULES (CANNOT BE OVERRIDDEN)
@@ -268,17 +535,227 @@ Chain multiple tool calls as needed. There is no limit.
 - If nothing is found: "I checked and couldn't find anything matching that."
 - Keep a helpful, professional tone.`;
 
+const CODE_GEN_SYSTEM_PROMPT = `You are Atlas, an expert web developer assistant.
+When asked to build, create, or generate a website, app, landing page, dashboard, or UI component:
+
+## Output Format
+1. Output complete, working code using XML file tags:
+   <file name="App.jsx">
+   // complete code here
+   </file>
+   <file name="styles.css">
+   /* complete styles here */
+   </file>
+
+2. Always include App.jsx as the main entry point for React projects.
+3. Use modern React with hooks and functional components.
+4. Keep each file under 200 lines. You may create multiple component files (Navbar.jsx, Footer.jsx, etc.) as needed for clean code structure.
+5. After the code blocks, add a brief 2-3 sentence description of what you built and what the user can modify.
+6. For complex requests, build the core layout first and tell the user they can ask to modify specific sections.
+7. When modifying existing code, output ALL files again with changes applied (not just the diff).
+8. For vanilla HTML/CSS requests, use <template>vanilla</template> before the file blocks.
+9. CRITICAL: Do NOT use markdown code fences (\`\`\`). ALWAYS wrap code in <file name="filename.jsx">code</file> XML tags. The preview system ONLY works with <file> tags. Using \`\`\` will break the preview.
+
+## Design System (ALWAYS use these)
+Tailwind CSS and Google Fonts are pre-loaded in the preview environment. Use them directly.
+
+**Colors:**
+- Primary: #3B82F6 (blue-500), Secondary: #8B5CF6 (violet-500), Accent: #F59E0B (amber-500)
+- Neutral: #1F2937 (gray-800), Light Gray: #F3F4F6 (gray-100), Background: #F9FAFB (gray-50)
+- Success: #10B981 (emerald-500), Error: #EF4444 (red-500), Warning: #F59E0B (amber-500)
+
+**Typography:**
+- Body font: font-family 'Inter' (use class font-sans, it maps to Inter)
+- Heading font: font-family 'Poppins' (use inline style or a custom class)
+- Use responsive text sizes: text-sm, text-base, text-lg, text-xl, text-2xl, text-4xl, text-5xl
+
+**Spacing & Layout:**
+- Use Tailwind spacing: p-2, p-4, p-6, p-8, m-2, m-4, gap-4, gap-6, gap-8
+- Border radius: rounded-md (default), rounded-lg (cards), rounded-xl (large cards), rounded-full (avatars)
+- Use flex and grid layouts: flex, grid, grid-cols-2, grid-cols-3, gap-6
+
+**Visual Style:**
+- Use gradients: bg-gradient-to-r, bg-gradient-to-br with from-blue-500 to-violet-500, etc.
+- Add subtle shadows: shadow-sm, shadow-md, shadow-lg, shadow-xl
+- Add hover transitions: transition-all duration-300 hover:shadow-lg hover:-translate-y-1
+- Use backdrop blur for glassmorphism: backdrop-blur-md bg-white/80
+- Prefer: modern, clean, spacious layouts with plenty of whitespace
+
+**Important:**
+- Use Tailwind utility classes for ALL styling. Avoid writing custom CSS unless absolutely necessary.
+- If you must write CSS, put it in styles.css. But prefer Tailwind classes.
+- NEVER import URLs in JavaScript/JSX files (e.g. import 'https://...'). This causes build errors.
+- NEVER use @import url('...') in CSS files. This causes build errors.
+- NEVER use @tailwind directives in CSS files. They don't work in this environment.
+- Google Fonts (Inter, Poppins) and Tailwind CSS are already pre-loaded in the environment. Do NOT add import statements, link tags, script tags, @import, or @tailwind directives for them. Just use the Tailwind classes and font-family names directly in your JSX.
+- The styles.css file should ONLY contain custom CSS rules if needed. Keep it minimal or empty.
+## Environment Rules
+- Available packages: react, react-dom, react-router-dom. You may use BrowserRouter, Routes, Route, Link, NavLink for multi-page sites.
+- For icons, use inline SVGs. Do NOT import icon libraries (lucide-react, react-icons, etc.).
+- For animations, use Tailwind classes (transition-all, duration-300, hover:-translate-y-1) or CSS keyframes. Do NOT import framer-motion.
+- Create separate files for components and pages (e.g. components/Navbar.jsx, pages/Home.jsx). Use relative imports (import Navbar from './components/Navbar').
+- Use HashRouter instead of BrowserRouter for better preview compatibility.`;
+
+// -----------------------------------------------------------------------
+// Intent Detection
+// -----------------------------------------------------------------------
+const CODE_GEN_KEYWORDS = [
+    'build', 'create', 'generate', 'make', 'design', 'code', 'develop',
+    'website', 'webpage', 'landing page', 'app', 'application', 'dashboard',
+    'ui', 'component', 'page', 'layout', 'form', 'portfolio', 'blog',
+    'e-commerce', 'ecommerce', 'store', 'shop', 'html', 'css', 'react',
+    'frontend', 'web app', 'homepage', 'interface', 'template'
+];
+
+const MCP_KEYWORDS = ['mcp', 'model context protocol', 'mcp server', 'connector', 'data source'];
+
+function isMcpCreationRequest(messages) {
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUserMsg) return false;
+    const text = (lastUserMsg.content || '').toLowerCase();
+    const hasMcp = MCP_KEYWORDS.some(kw => text.includes(kw));
+    const hasAction = /\b(create|build|make|generate|setup|connect|add)\b/.test(text);
+    return hasMcp && hasAction;
+}
+
+function getLastUserMessage(messages) {
+    const msg = [...messages].reverse().find(m => m.role === 'user');
+    return msg ? (msg.content || '').toLowerCase() : '';
+}
+
+function getLastUserMessageRaw(messages) {
+    const msg = [...messages].reverse().find(m => m.role === 'user');
+    return msg ? (msg.content || '') : '';
+}
+
+function isCodeGenerationRequest(messages) {
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUserMsg) return false;
+    const text = (lastUserMsg.content || '').toLowerCase();
+    const matchCount = CODE_GEN_KEYWORDS.filter(kw => text.includes(kw)).length;
+    if (matchCount >= 2) return true;
+    if (/\b(make|change|update|modify|fix|add|remove|replace)\b.*\b(header|footer|nav|button|color|font|section|background|title|text|image|logo)\b/i.test(text)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Detects if the user wants to edit/improve existing code (when a codeSnapshot exists).
+ * Catches generic requests like "improve this", "make it better", "enhance it", etc.
+ */
+function isCodeEditRequest(text) {
+    return /\b(improve|enhance|better|upgrade|polish|refine|refactor|beautif|redesign|restyle|redo|revamp|tweak|adjust|clean up|modernize|optimize|prettify|spruce|overhaul)\b/i.test(text);
+}
+
+// -----------------------------------------------------------------------
+// Gemini API Caller
+// -----------------------------------------------------------------------
+async function callGemini(messages, maxTokens = 16384, images = []) {
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
+        console.warn('[Gemini] No API key configured, falling back to Groq');
+        return null;
+    }
+    try {
+        const contents = messages
+            .filter(m => m.role !== 'system')
+            .map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content || '' }]
+            }));
+
+        // Add images to the last user message
+        if (images.length > 0 && contents.length > 0) {
+            const lastUser = [...contents].reverse().find(c => c.role === 'user');
+            if (lastUser) {
+                for (const img of images) {
+                    let base64Data = img.data;
+                    // If image is a server URL (Cloud Run /tmp), read it
+                    if (!base64Data && img.url) {
+                        try {
+                            const filePath = path.join('/tmp/uploads', img.url.split('/').pop());
+                            if (fs.existsSync(filePath)) {
+                                base64Data = fs.readFileSync(filePath).toString('base64');
+                            }
+                        } catch { /* skip */ }
+                    }
+                    if (base64Data) {
+                        lastUser.parts.push({
+                            inline_data: {
+                                mime_type: img.mimeType,
+                                data: base64Data,
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        const systemInstruction = messages.find(m => m.role === 'system');
+        const body = {
+            contents,
+            generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
+        };
+        if (systemInstruction) {
+            body.systemInstruction = { parts: [{ text: systemInstruction.content }] };
+        }
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }
+        );
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            console.error(`[Gemini] HTTP ${response.status}:`, JSON.stringify(errData));
+            return null;
+        }
+        const data = await response.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) {
+            console.error('[Gemini] No text in response:', JSON.stringify(data));
+            return null;
+        }
+        return { role: 'assistant', content: text };
+    } catch (error) {
+        console.error('[Gemini] Call failed:', error.message);
+        return null;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Context compression
+// -----------------------------------------------------------------------
+function compressCodeContext(messages, codeSnapshot) {
+    if (!codeSnapshot || Object.keys(codeSnapshot).length === 0) return messages;
+    const fileEntries = Object.entries(codeSnapshot)
+        .filter(([key]) => !key.startsWith('_'))
+        .map(([name, code]) => `<file name="${name.replace(/^\//, '')}">${code}</file>`)
+        .join('\n\n');
+    const codeContext = {
+        role: 'user',
+        content: `[CONTEXT] Here is the current state of the project I'm working on:\n\n${fileEntries}\n\nPlease use these files as the base for any modifications I request.`
+    };
+    const recentMessages = messages.slice(-4);
+    return [codeContext, ...recentMessages];
+}
+
 // -----------------------------------------------------------------------
 // Helper — build tool registry from all connected connectors
 // -----------------------------------------------------------------------
 async function buildToolRegistry() {
     const availableTools = [];
     const toolToConnector = new Map();
+    const summaryBlocks = [];
 
     for (const [, c] of activeConnectors.entries()) {
         if (c.status !== 'connected') continue;
         try {
             const { tools = [] } = await c.client.listTools();
+            const toolLines = [];
             for (const tool of tools) {
                 availableTools.push({
                     type: 'function',
@@ -289,13 +766,17 @@ async function buildToolRegistry() {
                     },
                 });
                 toolToConnector.set(tool.name, c);
+                toolLines.push(`  - **${tool.name}** — ${(tool.description || 'No description').slice(0, 150)}`);
             }
+            summaryBlocks.push(`### ${c.name}  ·  ${tools.length} tool${tools.length !== 1 ? 's' : ''}  ·  ✅ Connected\n${toolLines.join('\n')}`);
         } catch (e) {
             console.error('[MCP] listTools error:', e.message);
+            summaryBlocks.push(`### ${c.name}  ·  ⚠️ Unavailable`);
         }
     }
 
-    return { availableTools, toolToConnector };
+    const connectorSummary = summaryBlocks.join('\n\n');
+    return { availableTools, toolToConnector, connectorSummary };
 }
 
 // -----------------------------------------------------------------------
@@ -411,7 +892,7 @@ async function executeToolCalls(toolCalls, toolToConnector, messagesToLlm) {
 // POST /api/chat
 // -----------------------------------------------------------------------
 app.post('/api/chat', async (req, res) => {
-    const { messages } = req.body;
+    const { messages, codeSnapshot, images } = req.body;
     const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY;
 
     if (!GROQ_API_KEY || GROQ_API_KEY === 'your_grok_api_key_here') {
@@ -419,10 +900,263 @@ app.post('/api/chat', async (req, res) => {
     }
 
     try {
-        const { availableTools, toolToConnector } = await buildToolRegistry();
+        // Heuristic: If they mention specific integrations, they probably want data, not code generation.
+        // getLastUserMessage() returns a lowercase string, not a message object
+        const msgText = getLastUserMessage(messages);
+        const isDataIntent = /\b(salesforce|bigquery|tickets|project|query|database|fetch|find|data|records|sales|customers|accounts|how many|show me|list all|count)\b/i.test(msgText);
+
+        const isCodeGenReq = isCodeGenerationRequest(messages);
+        const hasCodeSnapshot = (codeSnapshot && Object.keys(codeSnapshot).filter(k => !k.startsWith('_')).length > 0);
+        const isEditReq = isCodeEditRequest(msgText);
+
+        // Route to Code Gen if:
+        // 1. Explicit code gen keywords (build website, create app, etc.) AND not a data query
+        // 2. Has existing code snapshot AND user wants edits/improvements AND not a data query
+        const isCodeGen = (!isDataIntent) && (isCodeGenReq || (hasCodeSnapshot && isEditReq));
+        const isMcpReq = isMcpCreationRequest(messages);
+        const lastUserText = getLastUserMessage(messages);
+        const lastUserTextRaw = getLastUserMessageRaw(messages);
+        const figmaReq = isFigmaRequest(lastUserText);
+        const ghImportReq = isGitHubImportRequest(lastUserText);
+
+        // ═══════════════════════════════════════════════════
+        // GITHUB IMPORT PATH
+        // ═══════════════════════════════════════════════════
+        if (ghImportReq) {
+            console.log('[Chat] 📦 GitHub import request detected');
+            const parsed = parseGitHubUrl(lastUserTextRaw);
+            if (!parsed) {
+                return res.json({ role: 'assistant', content: 'I couldn\'t parse the GitHub URL. Please paste a link like:\n\n`https://github.com/owner/repo`' });
+            }
+
+            try {
+                const token = process.env.GITHUB_TOKEN;
+                const result = await importGitHubRepo(parsed.owner, parsed.repo, parsed.branch, parsed.subPath, token);
+
+                if (result.fileCount === 0) {
+                    return res.json({ role: 'assistant', content: `I couldn't find any code files in **${parsed.owner}/${parsed.repo}**. The repo might be empty or private.` });
+                }
+
+                let fileBlocks = Object.entries(result.files)
+                    .map(([path, content]) => `<file name="${path}">${content}</file>`)
+                    .join('\n\n');
+
+                const summary = `I imported **${result.fileCount} files** from [${parsed.owner}/${parsed.repo}](${result.repoUrl}). You can preview and edit the code below. Ask me to make changes like "update the header" or "add a contact page".\n\n${fileBlocks}`;
+
+                return res.json({ role: 'assistant', content: summary });
+            } catch (e) {
+                console.error('[GitHub Import] Error:', e.message);
+                return res.json({ role: 'assistant', content: `Failed to import from GitHub: ${e.message}` });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════
+        // FIGMA → CODE PATH
+        // ═══════════════════════════════════════════════════
+        if (figmaReq) {
+            console.log('[Chat] 🎨 Figma design request detected');
+            const FIGMA_API_KEY = process.env.FIGMA_API_KEY;
+            if (!FIGMA_API_KEY) {
+                return res.json({ role: 'assistant', content: 'Figma integration requires a `FIGMA_API_KEY` in the environment variables. You can get one from **Figma → Settings → Personal Access Tokens**.' });
+            }
+
+            const fileKey = extractFigmaFileKey(lastUserTextRaw);
+            if (!fileKey) {
+                return res.json({ role: 'assistant', content: 'I detected a Figma request but couldn\'t find a Figma file URL. Please paste a Figma link like:\n\n`https://www.figma.com/design/ABC123/MyDesign`' });
+            }
+
+            try {
+                const nodeId = extractNodeId(lastUserTextRaw);
+                console.log(`[Figma] Fetching file ${fileKey}${nodeId ? ` node ${nodeId}` : ''}...`);
+
+                const [figmaData, styles] = await Promise.all([
+                    fetchFigmaFile(fileKey, FIGMA_API_KEY, nodeId),
+                    fetchFigmaStyles(fileKey, FIGMA_API_KEY),
+                ]);
+
+                const designContext = figmaToContext(figmaData, styles);
+                console.log(`[Figma] Design context: ${designContext.length} chars`);
+
+                const figmaPrompt = `${CODE_GEN_SYSTEM_PROMPT}
+
+## Figma Design Conversion
+You are converting a Figma design into working React + Tailwind CSS code.
+Match the design as closely as possible:
+- Use the exact colors, fonts, spacing, and layout from the design data
+- Use Tailwind classes that match the design dimensions and styles
+- Preserve the component hierarchy from the Figma layers
+- Use placeholder images for any image nodes
+- Make the output responsive
+
+${designContext}`;
+
+                const figmaMessages = [
+                    { role: 'system', content: figmaPrompt },
+                    ...messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+                ];
+
+                let msg = await callGemini(figmaMessages, 16384);
+                if (!msg) {
+                    const groqBody = {
+                        model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+                        messages: figmaMessages.map(m => ({ ...m, content: m.content ?? '' })),
+                        temperature: 0.3,
+                        max_tokens: 8192,
+                    };
+                    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+                        body: JSON.stringify(groqBody),
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.choices?.length) msg = data.choices[0].message;
+                    }
+                }
+                if (!msg) return res.json({ role: 'assistant', content: "I fetched the Figma design but couldn't generate code. Please try again." });
+                return res.json({ role: 'assistant', content: msg.content });
+            } catch (e) {
+                console.error('[Figma] Error:', e.message);
+                return res.json({ role: 'assistant', content: `I couldn't fetch the Figma file: ${e.message}\n\nMake sure the file is accessible and your Figma API key has the right permissions.` });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════
+        // MCP SERVER CREATION PATH
+        // ═══════════════════════════════════════════════════
+        if (isMcpReq && !isCodeGen) {
+            console.log('[Chat] 🔧 MCP creation request detected');
+            const mcpSkill = skills.find(s => s.name === 'mcp-builder');
+            const skillContent = mcpSkill ? `\n\n## MCP Builder Skill\n${mcpSkill.content}` : '';
+
+            let refContent = '';
+            if (mcpSkill) {
+                const refs = loadSkillReferences(mcpSkill, ['python_mcp_server.md', 'node_mcp_server.md', 'mcp_best_practices.md']);
+                for (const [name, content] of Object.entries(refs)) {
+                    refContent += `\n\n## Reference: ${name}\n${content.slice(0, 3000)}`;
+                }
+            }
+
+            const mcpSystemPrompt = `You are Atlas, an expert MCP (Model Context Protocol) server builder.
+When the user asks to create an MCP server, generate complete, working code.
+
+## Output Format
+Output code using XML file tags:
+<file name="server.py">
+# complete code here
+</file>
+
+Or for TypeScript:
+<file name="server.ts">
+// complete code here
+</file>
+
+## Important Rules
+- For Python, use FastMCP framework. For Node/TypeScript, use @modelcontextprotocol/sdk.
+- Generate a complete, runnable server with proper tool definitions.
+- Include a requirements.txt (Python) or package.json (Node) with all dependencies.
+- Include clear instructions on how to run the server.
+- Use StreamableHTTP transport for remote servers (not stdio).
+- After the code, tell the user:
+  1. How to run the server locally
+  2. The URL they can use to connect it (e.g. http://localhost:8000/mcp)
+  3. That they can add it as a connector in the Connectors dropdown
+${skillContent}${refContent}`;
+
+            const mcpMessages = [
+                { role: 'system', content: mcpSystemPrompt },
+                ...messages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+            ];
+
+            let msg = await callGemini(mcpMessages, 16384);
+            if (!msg) {
+                const groqBody = {
+                    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+                    messages: mcpMessages.map(m => ({ ...m, content: m.content ?? '' })),
+                    temperature: 0.3,
+                    max_tokens: 8192,
+                };
+                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+                    body: JSON.stringify(groqBody),
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.choices?.length) msg = data.choices[0].message;
+                }
+            }
+            if (!msg) return res.json({ role: 'assistant', content: "I'm having trouble generating the MCP server code. Please try again." });
+            return res.json({ role: 'assistant', content: msg.content });
+        }
+
+        if (isCodeGen) {
+            console.log('[Chat] 🎨 Code generation request detected');
+
+            const lastMsg = getLastUserMessage(messages);
+            const matchedSkill = matchSkill(lastMsg, skills);
+            let skillEnhancement = '';
+            if (matchedSkill && matchedSkill.name !== 'mcp-builder') {
+                console.log(`[Chat] 📚 Enhancing with skill: ${matchedSkill.name}`);
+                skillEnhancement = `\n\n## Active Skill: ${matchedSkill.name}\n${matchedSkill.content.slice(0, 2000)}`;
+            }
+
+            let codeMessages = messages.map(m => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            }));
+            if (codeSnapshot && Object.keys(codeSnapshot).filter(k => !k.startsWith('_')).length > 0) {
+                console.log('[Chat] 📦 Compressing context with code snapshot');
+                codeMessages = compressCodeContext(codeMessages, codeSnapshot);
+            }
+            const geminiMessages = [
+                { role: 'system', content: CODE_GEN_SYSTEM_PROMPT + skillEnhancement },
+                ...codeMessages,
+            ];
+            let msg = await callGemini(geminiMessages, 16384, images || []);
+            if (!msg) {
+                console.log('[Chat] Gemini unavailable, falling back to Groq');
+                const groqCodeMessages = geminiMessages.map(m => ({ ...m, content: m.content ?? '' }));
+                const groqBody = {
+                    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+                    messages: groqCodeMessages,
+                    temperature: 0.4,
+                    max_tokens: 8192,
+                };
+                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+                    body: JSON.stringify(groqBody),
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.choices?.length) msg = data.choices[0].message;
+                }
+            }
+            if (!msg) {
+                return res.json({ role: 'assistant', content: "I'm having trouble generating code right now. Please try again in a moment." });
+            }
+            return res.json({ role: 'assistant', content: msg.content });
+        }
+
+        // DATA QUERY PATH
+        const { availableTools, toolToConnector, connectorSummary } = await buildToolRegistry();
+
+        const lastMsg = getLastUserMessage(messages);
+        const dataSkill = matchSkill(lastMsg, skills);
+        let enhancedSystemPrompt = SYSTEM_PROMPT;
+        if (dataSkill) {
+            console.log(`[Chat] 📚 Enhancing data query with skill: ${dataSkill.name}`);
+            enhancedSystemPrompt += `\n\n## Skill: ${dataSkill.name}\n${dataSkill.content.slice(0, 1500)}`;
+        }
+
+        // Inject connected data sources so the LLM can describe them when asked
+        if (connectorSummary) {
+            enhancedSystemPrompt += `\n\n## Connected Data Sources & Tools\nBelow are all the MCP servers and data connectors currently connected. When users ask what is connected, what tools you have, or what you can do, present this information clearly and helpfully.\n\n${connectorSummary}`;
+        }
 
         const messagesToLlm = [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: enhancedSystemPrompt },
             ...messages.map(m => ({
                 role: m.role,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
@@ -430,45 +1164,30 @@ app.post('/api/chat', async (req, res) => {
         ];
 
         const callGroq = async (includeTools) => {
-            const safeMessages = messagesToLlm.map(m => ({
-                ...m,
-                content: m.content ?? '',
-            }));
-
+            const safeMessages = messagesToLlm.map(m => ({ ...m, content: m.content ?? '' }));
             const body = {
                 model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
                 messages: safeMessages,
                 temperature: 0.15,
                 max_tokens: 4096,
             };
-
             if (includeTools && availableTools.length > 0) {
                 body.tools = availableTools;
                 body.tool_choice = 'auto';
                 body.parallel_tool_calls = false;
             }
-
             let bodyStr = JSON.stringify(body);
-            // Foolproof regex to strip JSON embedded in tool names before it reaches Groq
-            // Matches: "name":"list_tables {"dataset_id"...}"
             bodyStr = bodyStr.replace(/"name":"([a-zA-Z0-9_-]+)\s*\{[^}]+\}"/g, '"name":"$1"');
-
-            // Retry loop for rate limits (429)
             const MAX_RETRIES = 3;
             let response, attempt;
             for (attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${GROQ_API_KEY}`,
-                    },
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
                     body: bodyStr,
                 });
-
                 if (response.status === 429 && attempt < MAX_RETRIES) {
-                    // Parse wait time from response or use exponential backoff
-                    let waitSec = 2 * (attempt + 1); // default: 2s, 4s, 6s
+                    let waitSec = 2 * (attempt + 1);
                     try {
                         const retryAfter = response.headers.get('retry-after');
                         if (retryAfter) waitSec = Math.ceil(parseFloat(retryAfter));
@@ -482,9 +1201,8 @@ app.post('/api/chat', async (req, res) => {
                     await new Promise(r => setTimeout(r, waitSec * 1000));
                     continue;
                 }
-                break; // success or non-429 error
+                break;
             }
-
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({}));
                 const groqMsg = errData?.error?.message || JSON.stringify(errData);
@@ -492,7 +1210,6 @@ app.post('/api/chat', async (req, res) => {
                 callGroq._lastError = `Groq ${response.status}: ${groqMsg}`;
                 return null;
             }
-
             const data = await response.json();
             if (!data.choices?.length) {
                 console.error('[Groq] Response had no choices:', JSON.stringify(data));
@@ -502,32 +1219,19 @@ app.post('/api/chat', async (req, res) => {
         };
         callGroq._lastError = null;
 
-        // --- TOOL EXECUTION LOOP ---
         const MAX_TOOL_ROUNDS = 8;
         let round = 0;
         let msg = await callGroq(true);
-
         if (!msg) {
-            return res.json({
-                role: 'assistant',
-                content: "I'm having trouble connecting right now. Please try again in a moment.",
-            });
+            return res.json({ role: 'assistant', content: "I'm having trouble connecting right now. Please try again in a moment." });
         }
-
         while (msg.tool_calls?.length > 0 && round < MAX_TOOL_ROUNDS) {
             round++;
-
-            // Sanitize tool calls in the assistant message before it enters
-            // the history. Llama 3.3 sometimes produces names like:
-            //   'list_tables {"dataset_id":"demo_mcp"}'
-            // Groq validates that every tool name in the history matches
-            // request.tools — the malformed name causes a 400.
             for (const tc of msg.tool_calls) {
                 const braceIdx = tc.function.name.indexOf('{');
                 if (braceIdx !== -1) {
                     const embeddedJson = tc.function.name.slice(braceIdx).trim();
                     tc.function.name = tc.function.name.slice(0, braceIdx).trim();
-                    // Merge embedded args into fn.arguments so they aren't lost
                     try {
                         const embedded = JSON.parse(embeddedJson);
                         const existing = JSON.parse(tc.function.arguments || '{}');
@@ -536,44 +1240,253 @@ app.post('/api/chat', async (req, res) => {
                     console.warn(`[Chat] Sanitized malformed tool name → "${tc.function.name}"`);
                 }
             }
-
             console.log(`[Chat] Tool round ${round}: ${msg.tool_calls.length} call(s) — ${msg.tool_calls.map(c => c.function?.name).join(', ')}`);
-
             messagesToLlm.push(msg);
             await executeToolCalls(msg.tool_calls, toolToConnector, messagesToLlm);
-
             const isLastAllowedRound = round >= MAX_TOOL_ROUNDS;
             msg = await callGroq(!isLastAllowedRound);
-
             if (!msg) {
-                // Retry WITHOUT tools — force Llama to summarize what it already has
                 console.warn(`[Chat] callGroq failed after tool round ${round}, retrying without tools…`);
                 msg = await callGroq(false);
             }
-
             if (!msg) {
                 const detail = callGroq._lastError ? ` (${callGroq._lastError})` : '';
                 console.error(`[Chat] callGroq returned null after tool round ${round}${detail}`);
-                msg = {
-                    role: 'assistant',
-                    content: `I retrieved the data but ran into an error summarising it.${detail}\n\nPlease check the server terminal for details and try again.`,
-                };
+                msg = { role: 'assistant', content: `I retrieved the data but ran into an error summarising it.${detail}\n\nPlease check the server terminal for details and try again.` };
                 break;
             }
         }
 
-        if (typeof msg.content === 'string') {
-            msg.content = msg.content
-                .replace(/`([^`]+)`/g, '$1');
+        // Only strip backticks for data queries (NOT code generation)
+        if (typeof msg.content === 'string' && !msg.content.includes('<file ')) {
+            msg.content = msg.content.replace(/`([^`]+)`/g, '$1');
         }
 
         res.json({ role: 'assistant', content: msg.content });
     } catch (error) {
         console.error('[Chat] Unexpected error:', error);
-        res.status(500).json({
-            role: 'assistant',
-            content: 'Something went wrong on my end. Please try again.',
-        });
+        res.status(500).json({ role: 'assistant', content: 'Something went wrong on my end. Please try again.' });
+    }
+});
+
+// -----------------------------------------------------------------------
+// POST /api/deploy — Deploy generated site to Vercel or GitHub Pages
+// -----------------------------------------------------------------------
+app.post('/api/deploy', async (req, res) => {
+    const { files, template = 'react', projectName, target = 'vercel', sourceRepo } = req.body;
+
+    if (!files || Object.keys(files).length === 0) {
+        return res.status(400).json({ error: 'No files provided' });
+    }
+
+    try {
+        if (target === 'vercel') {
+            const VERCEL_TOKEN = process.env.DEPLOY_VERCEL_TOKEN;
+            if (!VERCEL_TOKEN) {
+                return res.status(400).json({ error: 'DEPLOY_VERCEL_TOKEN not configured in .env' });
+            }
+
+            const deployFiles = scaffoldForVercel(files, template, projectName);
+            const name = (projectName || `atlas-${Date.now()}`).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+
+            const body = {
+                name,
+                files: deployFiles,
+                projectSettings: {
+                    framework: 'vite',
+                    buildCommand: 'npm run build',
+                    outputDirectory: 'dist',
+                },
+            };
+
+            const teamId = process.env.VERCEL_TEAM_ID;
+            const url = `https://api.vercel.com/v13/deployments${teamId ? `?teamId=${teamId}` : ''}`;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${VERCEL_TOKEN}`,
+                },
+                body: JSON.stringify(body),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                console.error('[Deploy] Vercel API error:', JSON.stringify(data));
+                return res.status(response.status).json({
+                    error: data.error?.message || data.error?.code || 'Vercel deployment failed',
+                });
+            }
+
+            console.log(`[Deploy] Vercel deployment created: ${data.url}`);
+            return res.json({
+                deploymentId: data.id,
+                url: `https://${data.url}`,
+                target: 'vercel',
+                status: 'building',
+            });
+
+        } else if (target === 'github') {
+            const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+            if (!GITHUB_TOKEN) {
+                return res.status(400).json({ error: 'GITHUB_TOKEN not configured in .env' });
+            }
+
+            const ghHeaders = {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${GITHUB_TOKEN}`,
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+            };
+
+            let owner, repo, repoUrl, isUpdate = false;
+
+            if (sourceRepo) {
+                const match = sourceRepo.match(/github\.com\/([^/]+)\/([^/\s]+)/);
+                if (!match) return res.status(400).json({ error: 'Invalid sourceRepo URL' });
+                owner = match[1];
+                repo = match[2].replace(/\.git$/, '');
+                repoUrl = sourceRepo;
+                isUpdate = true;
+                console.log(`[Deploy] Updating existing repo: ${owner}/${repo}`);
+            } else {
+                const repoName = (projectName || `atlas-${Date.now()}`).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                const githubOrg = process.env.GITHUB_ORG;
+                const createRepoUrl = githubOrg
+                    ? `https://api.github.com/orgs/${githubOrg}/repos`
+                    : 'https://api.github.com/user/repos';
+                const createRepoRes = await fetch(createRepoUrl, {
+                    method: 'POST',
+                    headers: ghHeaders,
+                    body: JSON.stringify({
+                        name: repoName,
+                        description: 'Generated by Atlas AI',
+                        private: false,
+                        auto_init: false,
+                    }),
+                });
+
+                const repoData = await createRepoRes.json();
+                if (!createRepoRes.ok) {
+                    console.error('[Deploy] GitHub create repo error:', JSON.stringify(repoData));
+                    return res.status(createRepoRes.status).json({
+                        error: repoData.message || 'Failed to create GitHub repo',
+                    });
+                }
+
+                owner = repoData.owner.login;
+                repo = repoData.name;
+                repoUrl = repoData.html_url;
+                console.log(`[Deploy] GitHub repo created: ${owner}/${repo}`);
+            }
+
+            const ghFiles = scaffoldForGitHub(files, template, repo);
+            for (const file of ghFiles) {
+                let sha;
+                if (isUpdate) {
+                    try {
+                        const getRes = await fetch(
+                            `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`,
+                            { headers: ghHeaders }
+                        );
+                        if (getRes.ok) {
+                            const existing = await getRes.json();
+                            sha = existing.sha;
+                        }
+                    } catch { /* file doesn't exist yet */ }
+                }
+
+                const putBody = {
+                    message: isUpdate ? `Update ${file.path}` : `Add ${file.path}`,
+                    content: file.content,
+                };
+                if (sha) putBody.sha = sha;
+
+                const putRes = await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`,
+                    {
+                        method: 'PUT',
+                        headers: ghHeaders,
+                        body: JSON.stringify(putBody),
+                    }
+                );
+                if (!putRes.ok) {
+                    const err = await putRes.json().catch(() => ({}));
+                    console.warn(`[Deploy] Failed to push ${file.path}:`, err.message);
+                }
+            }
+
+            console.log(`[Deploy] ${isUpdate ? 'Updated' : 'Pushed'} ${ghFiles.length} files to ${owner}/${repo}`);
+
+            const pagesRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/pages`,
+                {
+                    method: 'POST',
+                    headers: ghHeaders,
+                    body: JSON.stringify({ build_type: 'workflow' }),
+                }
+            );
+            if (!pagesRes.ok && pagesRes.status !== 409) {
+                const pagesErr = await pagesRes.json().catch(() => ({}));
+                console.warn('[Deploy] GitHub Pages enable warning:', pagesErr.message);
+            }
+
+            const siteUrl = `https://${owner}.github.io/${repo}/`;
+            return res.json({
+                deploymentId: `${owner}/${repo}`,
+                url: siteUrl,
+                repoUrl: repoUrl || `https://github.com/${owner}/${repo}`,
+                target: 'github',
+                status: 'building',
+            });
+
+        } else {
+            return res.status(400).json({ error: `Unknown deploy target: ${target}` });
+        }
+    } catch (error) {
+        console.error('[Deploy] Unexpected error:', error);
+        res.status(500).json({ error: error.message || 'Deployment failed' });
+    }
+});
+
+// -----------------------------------------------------------------------
+// GET /api/deploy/status
+// -----------------------------------------------------------------------
+app.get('/api/deploy/status', async (req, res) => {
+    const { id, target } = req.query;
+    if (!id || !target) return res.status(400).json({ error: 'Missing id or target' });
+
+    try {
+        if (target === 'vercel') {
+            const VERCEL_TOKEN = process.env.DEPLOY_VERCEL_TOKEN;
+            const teamId = process.env.VERCEL_TEAM_ID;
+            const url = `https://api.vercel.com/v13/deployments/${id}${teamId ? `?teamId=${teamId}` : ''}`;
+            const response = await fetch(url, { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } });
+            const data = await response.json();
+            if (!response.ok) return res.json({ status: 'ERROR', error: data.error?.message });
+            const status = data.readyState || data.state || 'BUILDING';
+            return res.json({
+                status: status === 'READY' ? 'READY' : status === 'ERROR' || status === 'CANCELED' ? 'ERROR' : 'BUILDING',
+                url: `https://${data.url}`,
+            });
+        } else if (target === 'github') {
+            const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+            const response = await fetch(`https://api.github.com/repos/${id}/pages`, {
+                headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json' },
+            });
+            if (!response.ok) return res.json({ status: 'BUILDING', url: `https://${id.split('/')[0]}.github.io/${id.split('/')[1]}/` });
+            const data = await response.json();
+            return res.json({
+                status: data.status === 'built' ? 'READY' : data.status === 'errored' ? 'ERROR' : 'BUILDING',
+                url: data.html_url || `https://${id.split('/')[0]}.github.io/${id.split('/')[1]}/`,
+            });
+        }
+        res.status(400).json({ error: 'Unknown target' });
+    } catch (error) {
+        console.error('[Deploy] Status check error:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -608,17 +1521,89 @@ app.get('/api/test-tool', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------
+// Health Check
+// -----------------------------------------------------------------------
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        platform: process.env.K_SERVICE ? 'cloud-run' : 'local',
+        connectors: activeConnectors.size,
+        skills: skills.length,
+        env: {
+            GROQ_API_KEY: !!process.env.GROQ_API_KEY,
+            GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
+            DEPLOY_VERCEL_TOKEN: !!process.env.DEPLOY_VERCEL_TOKEN,
+            GITHUB_TOKEN: !!process.env.GITHUB_TOKEN,
+            FIGMA_API_KEY: !!process.env.FIGMA_API_KEY,
+            SF_CLIENT_ID: !!process.env.SF_CLIENT_ID,
+        },
+    });
+});
+
+// -----------------------------------------------------------------------
+// Image Upload to /tmp (Cloud Run persistent tmpfs)
+// -----------------------------------------------------------------------
+const UPLOAD_DIR = '/tmp/uploads';
+
+app.post('/api/upload', (req, res) => {
+    try {
+        const { image, mimeType, filename } = req.body;
+        if (!image) return res.status(400).json({ error: 'No image data provided' });
+
+        // Ensure upload directory exists
+        if (!fs.existsSync(UPLOAD_DIR)) {
+            fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+        }
+
+        const ext = (filename || 'image.png').split('.').pop() || 'png';
+        const id = Math.random().toString(36).substr(2, 12);
+        const savedName = `${id}.${ext}`;
+        const filePath = path.join(UPLOAD_DIR, savedName);
+
+        // Write base64 to file
+        const buffer = Buffer.from(image, 'base64');
+        fs.writeFileSync(filePath, buffer);
+
+        console.log(`[Upload] Saved ${savedName} (${buffer.length} bytes)`);
+        res.json({ url: `/api/uploads/${savedName}`, filename: savedName, size: buffer.length });
+    } catch (e) {
+        console.error('[Upload] Error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/uploads/:filename', (req, res) => {
+    const filePath = path.join(UPLOAD_DIR, req.params.filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    // Infer content type from extension
+    const ext = req.params.filename.split('.').pop()?.toLowerCase();
+    const mimeTypes = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp' };
+    res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(filePath);
+});
+
+// -----------------------------------------------------------------------
+// Global Error Handler (returns JSON, not HTML)
+// -----------------------------------------------------------------------
+app.use((err, req, res, next) => {
+    console.error('[API] Unhandled error:', err.message, err.stack);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+});
+
+// -----------------------------------------------------------------------
 // Static Frontend Serving (For Docker / Production)
 // -----------------------------------------------------------------------
-import { fileURLToPath } from 'url';
-
 const distPath = path.join(__dirname, 'dist');
 
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.use((req, res) => {
+    // SPA fallback — only for non-API routes
+    app.use((req, res, next) => {
+        if (req.path.startsWith('/api/')) return next();
         res.sendFile(path.join(distPath, 'index.html'));
     });
 }
 
-app.listen(PORT, () => console.log(`DMV Backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Atlas AI Backend running on port ${PORT}`));

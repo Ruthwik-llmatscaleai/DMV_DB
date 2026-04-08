@@ -1,6 +1,6 @@
 steps:
   # ─────────────────────────────────────────────────────────────────────────────
-  # Part 1: Build and Deploy the Secure Python MCP Server
+  # Part 1: Build and Deploy the Secure Python MCP Server (BigQuery)
   # ─────────────────────────────────────────────────────────────────────────────
   - name: 'gcr.io/cloud-builders/docker'
     id: build-mcp
@@ -24,9 +24,37 @@ steps:
       - '--allow-unauthenticated'
       - '--port'
       - '8080'
-      
+      - '--set-env-vars'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,MAX_BYTES_BILLED=$_MAX_BYTES_BILLED'
+
   # ─────────────────────────────────────────────────────────────────────────────
-  # Part 2: Build and Deploy the Full-Stack Node.js Application
+  # Part 2: Build and Deploy the Salesforce MCP Bridge
+  # ─────────────────────────────────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-sf-bridge
+    args: ['build', '-f', 'Dockerfile.sf-bridge', '-t', 'gcr.io/$PROJECT_ID/sf-mcp-bridge', '.']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-sf-bridge
+    args: ['push', 'gcr.io/$PROJECT_ID/sf-mcp-bridge']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-sf-bridge
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'sf-mcp-bridge'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/sf-mcp-bridge'
+      - '--region'
+      - 'us-central1'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Part 3: Build and Deploy the Full-Stack Node.js Application
   # ─────────────────────────────────────────────────────────────────────────────
   - name: 'gcr.io/cloud-builders/docker'
     id: build-app
@@ -51,8 +79,28 @@ steps:
       - '--port'
       - '8080'
       - '--set-env-vars'
-      - 'ALLOWED_ORIGIN=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,ALLOWED_ORIGIN_PROD=https://dmv-atlas-app-nyz3kpmzjq-uc.a.run.app,GROQ_API_KEY=$_GROQ_API_KEY,GROQ_MODEL=llama-3.3-70b-versatile'
+      - 'ALLOWED_ORIGIN=$_ALLOWED_ORIGIN,ALLOWED_ORIGIN_PROD=$_ALLOWED_ORIGIN_PROD,GROQ_API_KEY=$_GROQ_API_KEY,GROQ_MODEL=llama-3.3-70b-versatile,GEMINI_API_KEY=$_GEMINI_API_KEY,SF_CLIENT_ID=$_SF_CLIENT_ID,SF_CLIENT_SECRET=$_SF_CLIENT_SECRET,SF_REFRESH_TOKEN=$_SF_REFRESH_TOKEN,SF_INSTANCE_URL=$_SF_INSTANCE_URL,SF_MCP_URL=$_SF_MCP_URL,GITHUB_TOKEN=$_GITHUB_TOKEN,GITHUB_ORG=$_GITHUB_ORG,FIGMA_API_KEY=$_FIGMA_API_KEY,DEPLOY_VERCEL_TOKEN=$_DEPLOY_VERCEL_TOKEN'
+
+substitutions:
+  _MAX_BYTES_BILLED: '100000000'
+  _ALLOWED_ORIGIN: '*'
+  _ALLOWED_ORIGIN_PROD: '*'
+  _GROQ_API_KEY: 'required'
+  _GEMINI_API_KEY: 'required'
+  _SF_CLIENT_ID: 'required'
+  _SF_CLIENT_SECRET: 'required'
+  _SF_REFRESH_TOKEN: 'required'
+  _SF_INSTANCE_URL: 'https://login.salesforce.com'
+  _SF_MCP_URL: 'required'
+  _GITHUB_TOKEN: 'required'
+  _GITHUB_ORG: 'LLM-AI-INDIA'
+  _FIGMA_API_KEY: 'required'
+  _DEPLOY_VERCEL_TOKEN: 'required'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
 
 images:
   - 'gcr.io/$PROJECT_ID/dmv-mcp-server'
+  - 'gcr.io/$PROJECT_ID/sf-mcp-bridge'
   - 'gcr.io/$PROJECT_ID/dmv-atlas-app'
